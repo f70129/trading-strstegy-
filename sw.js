@@ -1,4 +1,4 @@
-const CACHE = 'taiwan-trading-v16';
+const CACHE = 'taiwan-trading-v17';
 const ASSETS = ['./manifest.json', './icon.svg'];
 
 self.addEventListener('install', (e) => {
