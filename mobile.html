@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script>
 (function(){
-  var V='18';
+  var V='19';
   if (localStorage.getItem('app_ver') === V) return;
   localStorage.setItem('app_ver', V);
   var reload = function(){ location.reload(); };
@@ -109,11 +109,17 @@ body.mobile-app {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 300;
   height: calc(var(--nav-h) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
-  background: #0d1526; border-top: 1px solid var(--border);
+  background: #0d1526; border-top: 1px solid var(--accent);
   display: grid; grid-template-columns: repeat(5, 1fr);
+  box-shadow: 0 -4px 24px rgba(0,0,0,.45);
 }
-.mob-tab { font-size: 10px; }
-.mob-tab span.icon { font-size: 16px; }
+.mob-tab {
+  background: none; border: none; color: var(--muted);
+  padding: 6px 2px; cursor: pointer; min-height: 48px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  touch-action: manipulation;
+}
+.mob-tab.active { color: var(--accent); font-weight: 600; }
 .input-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .kelly-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .kelly-result { background: #0d1526; border: 1px solid var(--gold); border-radius: 8px; padding: 12px; text-align: center; margin-top: 8px; }
@@ -138,12 +144,8 @@ body.mobile-app {
 .btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .btn-gold { background: var(--gold); color: #000; }
 .btn-green { background: var(--green); color: #000; }
-.mob-tab {
-  background: none; border: none; color: var(--muted);
-  padding: 8px 2px; cursor: pointer;
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-}
-.mob-tab.active { color: var(--accent); }
+.mob-tab { font-size: 10px; }
+.mob-tab span.icon { font-size: 18px; line-height: 1; }
 .signal-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .signal-pill { padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: bold; }
 .error-panel { background: rgba(255,68,102,.08); border: 1px solid var(--red); border-radius: 8px; padding: 16px; text-align: center; }
@@ -345,7 +347,7 @@ body.mobile-app {
   <button type="button" class="mob-tab" data-tab="more"><span class="icon">⚙️</span>設定</button>
 </nav>
 
-<script src="js/dashboard.js?v=18"></script>
-<script src="js/mobile-ui.js?v=18"></script>
+<script src="js/mobile-ui.js?v=19"></script>
+<script src="js/dashboard.js?v=19"></script>
 </body>
 </html>

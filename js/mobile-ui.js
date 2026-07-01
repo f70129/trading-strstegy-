@@ -1,29 +1,21 @@
 // 手機版底部導覽
 
 function initMobileTabs() {
+  if (window._mobileTabsInited) return;
+  window._mobileTabsInited = true;
 
   const tabs = document.querySelectorAll('.mob-tab');
-
   const panels = document.querySelectorAll('.mob-panel:not(#tab-volume)');
-
   if (!tabs.length) return;
 
-
-
   function show(tab) {
-
     tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-
     panels.forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
-
+    window.scrollTo(0, 0);
   }
 
-
-
   tabs.forEach(t => t.addEventListener('click', () => show(t.dataset.tab)));
-
   show('quote');
-
 }
 
 
@@ -166,10 +158,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const pwaHint = document.getElementById('pwaTokenHint');
 
   if (pwaHint && typeof isStandalonePWA === 'function' && isStandalonePWA()) {
-
     pwaHint.style.display = 'block';
-
   }
 
+  initMobileTabs();
 });
+
+if (document.readyState !== 'loading') initMobileTabs();
 
