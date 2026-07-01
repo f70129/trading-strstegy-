@@ -56,6 +56,17 @@ git push -u origin main
 - Token 只存在使用者手機瀏覽器的 localStorage
 - 若曾不小心 commit 金鑰，請至 FinMind / FRED 後台重設
 
+## 本機 vs 手機（Netlify）差異
+
+| 項目 | 本機電腦 | 手機 Netlify |
+|------|----------|--------------|
+| 程式 | 本資料夾 `js/dashboard.js` | **GitHub 上同一檔**（需正確 push） |
+| FinMind Token | 電腦瀏覽器 localStorage | **手機要再填一次**（不共用） |
+| 即時代理 | `local-proxy.py` / 8787 | `netlify/functions/` 雲端函式 |
+| 量價分析 | 本機已修復 v12 | GitHub **必須含最新 `js/dashboard.js`** |
+
+手機失敗、本機成功 → **99% 是 GitHub 仍是舊版或目錄結構錯誤**（`dashboard.js` 平铺在根目錄而非 `js/` 內）。
+
 ## 部署後驗證
 
 右上角應顯示 **「● 雲端代理已就緒」**，載入 2330 / 加權 / 台指 有即時報價即成功。

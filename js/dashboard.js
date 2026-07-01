@@ -21,6 +21,8 @@ let state = {
   realtimeKey: null,
   realtimeChannel: null,
   lastTargetInfo: null,
+  lastCloses: null,
+  lastVolumes: null,
 };
 
 // =====================================================
@@ -74,7 +76,24 @@ function quickSymbol(sym) {
 // REAL DATA — FinMind (台股/台指) + Yahoo (全球指數)
 // =====================================================
 const FINMIND_API = 'https://api.finmindtrade.com/api/v4/data';
-const TAIEX_CACHE_KEY = 'finmind_taiex_daily_v2';
+const TAIEX_CACHE_KEY = 'finmind_taiex_daily_v3';
+const TAIEX_VOL_CACHE_KEY = 'finmind_taiex_vol_v1';
+
+/** FinMind 成交量欄位（API 版本命名不一致） */
+function volumeFromRow(r, extraKeys = []) {
+  if (!r || typeof r !== 'object') return 0;
+  const keys = [
+    ...extraKeys,
+    'Trading_Volume', 'trading_volume', 'Trading_volume',
+    'volume', 'Volume', 'TotalDealVolume', 'total_deal_volume',
+    'CTotalVolume',
+  ];
+  for (const k of keys) {
+    const v = Number(r[k]);
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return 0;
+}
 
 function getProxyHost() {
   return (localStorage.getItem('proxyHost') || '127.0.0.1:8787').replace(/^https?:\/\//, '').replace(/\/+$/, '');
@@ -165,6 +184,9 @@ function getFinMindToken() {
 
 async function fetchFinMind(params) {
   const token = getFinMindToken();
+  if (isCloudDeployed() && !token) {
+    throw new Error('雲端/手機版請至「設定」填入 FinMind Token 並儲存（與電腦本機設定不共用）。');
+  }
   const qs = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => qs.set(k, v));
   if (token) qs.set('token', token);
@@ -259,11 +281,46 @@ async function fetchTaiexDailyHistory(days = 90, onProgress) {
   return dates.map(d => cache[d]).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date));
 }
 
+async function fetchTaiexMarketVolDay(date) {
+  const rows = await fetchFinMind({
+    dataset: 'TaiwanStockStatisticsOfOrderBookAndTrade',
+    start_date: date,
+  });
+  if (!rows?.length) return null;
+  let maxVol = 0;
+  for (const r of rows) {
+    const v = volumeFromRow(r, ['TotalDealVolume', 'TotalDealMoney']);
+    if (v > maxVol) maxVol = v;
+  }
+  return maxVol > 0 ? maxVol : null;
+}
+
+async function ensureTaiexVolumeCache(dates, onProgress) {
+  const cache = JSON.parse(localStorage.getItem(TAIEX_VOL_CACHE_KEY) || '{}');
+  const missing = dates.filter(d => cache[d] == null);
+  let done = dates.length - missing.length;
+
+  for (let i = 0; i < missing.length; i += 3) {
+    const batch = missing.slice(i, i + 3);
+    const results = await Promise.allSettled(batch.map(d => fetchTaiexMarketVolDay(d)));
+    results.forEach((res, idx) => {
+      if (res.status === 'fulfilled' && res.value != null) cache[batch[idx]] = res.value;
+    });
+    done += batch.length;
+    if (onProgress) onProgress(Math.min(done, dates.length), dates.length);
+    await new Promise(r => setTimeout(r, 150));
+  }
+
+  localStorage.setItem(TAIEX_VOL_CACHE_KEY, JSON.stringify(cache));
+  return cache;
+}
+
 function pickFrontMonthFutures(rows) {
   const byDate = {};
   for (const row of rows) {
     const d = row.date;
-    if (!byDate[d] || (row.volume || 0) > (byDate[d].volume || 0)) byDate[d] = row;
+    const vol = volumeFromRow(row);
+    if (!byDate[d] || vol > volumeFromRow(byDate[d])) byDate[d] = row;
   }
   return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -308,7 +365,7 @@ async function fetchFinMindStock(stockId, startDate, endDate) {
     high: r.max,
     low: r.min,
     close: r.close,
-    volume: r.Trading_Volume,
+    volume: volumeFromRow(r),
     name: r.stock_name ? `${r.stock_id} ${r.stock_name}` : `台股 ${stockId}`,
   }));
 }
@@ -327,7 +384,7 @@ async function fetchFinMindFutures(futuresId, startDate, endDate) {
     high: r.max,
     low: r.min,
     close: r.close,
-    volume: r.volume,
+    volume: volumeFromRow(r),
     name: `台指期 ${futuresId}`,
   }));
 }
@@ -335,7 +392,16 @@ async function fetchFinMindFutures(futuresId, startDate, endDate) {
 async function fetchFinMindTaiexIndex(onProgress) {
   const bars = await fetchTaiexDailyHistory(120, onProgress);
   if (bars.length < 20) throw new Error('加權指數歷史資料不足');
-  return finMindRowsToSeries(bars, b => ({ ...b, name: '台灣加權指數 TAIEX' }));
+  const volCache = await ensureTaiexVolumeCache(bars.map(b => b.date), onProgress);
+  return finMindRowsToSeries(bars, b => ({
+    date: b.date,
+    open: b.open,
+    high: b.high,
+    low: b.low,
+    close: b.close,
+    volume: volCache[b.date] ?? 0,
+    name: '台灣加權指數 TAIEX',
+  }));
 }
 
 async function fetchViaProxy(targetUrl) {
@@ -960,6 +1026,11 @@ async function refreshRealtimeQuote(channel) {
     };
     state.lastTargetInfo = merged;
     renderTargetInfo(merged);
+    if (volume > 0 && state.lastCloses?.length && state.lastVolumes?.length) {
+      state.lastVolumes = state.lastVolumes.slice();
+      state.lastVolumes[state.lastVolumes.length - 1] = volume;
+      renderVolumeAnalysis(state.lastCloses, state.lastVolumes);
+    }
     const entryEl = document.getElementById('step_entryprice');
     if (entryEl) entryEl.value = q.price.toFixed(2);
     setDataStatus('ok', `● ${q.sourceLabel} · ${q.time || '更新中'}`);
@@ -1421,7 +1492,13 @@ function renderVolumeAnalysis(closes, volumes) {
   if (!el) return;
   const hasVol = Array.isArray(volumes) && volumes.some(v => v > 0);
   if (!closes || closes.length < 6 || !hasVol) {
-    el.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px;">此商品無成交量資料（如加權指數）或資料不足，無法進行量價分析。</div>';
+    const sym = (state.symbol || '').toUpperCase();
+    const isIndex = ['^TWII', 'TWII', '加權', 'TAIEX'].includes(sym);
+    const noToken = !getFinMindToken();
+    let hint = '資料不足，無法進行量價分析。';
+    if (noToken) hint = '請先在設定填入 FinMind Token（免費註冊），個股與加權大盤量價皆需此 Token。';
+    else if (isIndex) hint = '加權指數大盤成交量載入中或 FinMind 暫無資料，請重新載入或稍後再試。';
+    el.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:8px;">${hint}</div>`;
     return;
   }
 
@@ -1834,6 +1911,8 @@ async function loadSymbol() {
     renderFib(fibs, price, priceData.high52, priceData.low52);
 
     renderPriceChart(closes, timestamps, mas);
+    state.lastCloses = closes;
+    state.lastVolumes = volumes.slice();
     renderVolumeAnalysis(closes, volumes);
     calcKelly();
 
