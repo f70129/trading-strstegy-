@@ -186,6 +186,7 @@ function showLoadError(message) {
   setHtml('trendSystem', html);
   setHtml('elliottWave', html);
   setHtml('fibLevels', html);
+  if (document.getElementById('volumeAnalysis')) setHtml('volumeAnalysis', html);
   setDataStatus('err', '● 資料載入失敗');
 }
 

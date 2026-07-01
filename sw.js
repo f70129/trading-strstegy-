@@ -1,5 +1,5 @@
-const CACHE = 'taiwan-trading-v17';
-const ASSETS = ['./manifest.json', './icon.svg'];
+const CACHE = 'taiwan-trading-v18';
+const ASSETS = ['./manifest.json', './manifest-mobile.json', './icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));

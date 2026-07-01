@@ -1,7 +1,7 @@
 {
   "name": "台指看板 · 手機版",
   "short_name": "台指手機",
-  "description": "台股即時報價、量價分析、全球概況（手機優化）",
+  "description": "台股即時報價、波浪費波、量價、凱利、十步驟交易、全球概況（手機完整版）",
   "start_url": "./mobile.html",
   "display": "standalone",
   "background_color": "#0a0e1a",

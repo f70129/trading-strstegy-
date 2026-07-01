@@ -2,6 +2,26 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
+<script>
+(function(){
+  var V='18';
+  if (localStorage.getItem('app_ver') === V) return;
+  localStorage.setItem('app_ver', V);
+  var reload = function(){ location.reload(); };
+  var jobs = [];
+  if ('serviceWorker' in navigator) {
+    jobs.push(navigator.serviceWorker.getRegistrations().then(function(rs){
+      return Promise.all(rs.map(function(r){ return r.unregister(); }));
+    }));
+  }
+  if (window.caches) {
+    jobs.push(caches.keys().then(function(ks){
+      return Promise.all(ks.map(function(k){ return caches.delete(k); }));
+    }));
+  }
+  (jobs.length ? Promise.all(jobs) : Promise.resolve()).then(reload).catch(reload);
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0a0e1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -90,16 +110,46 @@ body.mobile-app {
   height: calc(var(--nav-h) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   background: #0d1526; border-top: 1px solid var(--border);
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
 }
+.mob-tab { font-size: 10px; }
+.mob-tab span.icon { font-size: 16px; }
+.input-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.kelly-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.kelly-result { background: #0d1526; border: 1px solid var(--gold); border-radius: 8px; padding: 12px; text-align: center; margin-top: 8px; }
+.kelly-pct { font-size: 28px; font-weight: bold; color: var(--gold); }
+.kelly-detail { color: var(--muted); font-size: 11px; margin-top: 4px; }
+.steps-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.step-item { background: #0d1526; border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; gap: 10px; align-items: flex-start; }
+.step-num { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #000; font-size: 11px; font-weight: bold; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.step-num.done { background: var(--green); }
+.step-num.warn { background: #ff9500; }
+.step-title { font-size: 11px; color: var(--accent); margin-bottom: 5px; }
+.step-input { background: #0a0e1a; border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 6px; font-size: 14px; width: 100%; }
+.step-display { font-size: 13px; font-weight: bold; margin-top: 4px; min-height: 20px; }
+.journal-area { background: #0d1526; border: 1px solid var(--border); border-radius: 8px; width: 100%; min-height: 80px; color: var(--text); padding: 10px; font-size: 14px; margin-bottom: 8px; }
+.log-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.log-table th { background: #0d1526; color: var(--muted); padding: 6px 4px; text-align: left; border-bottom: 1px solid var(--border); }
+.log-table td { padding: 6px 4px; border-bottom: 1px solid #1a2035; }
+.fib-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.fib-table th, .fib-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.wave-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+.wave-card { background: #0d1526; border-radius: 6px; padding: 8px; text-align: center; border: 1px solid var(--border); }
+.btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.btn-gold { background: var(--gold); color: #000; }
+.btn-green { background: var(--green); color: #000; }
 .mob-tab {
   background: none; border: none; color: var(--muted);
-  font-size: 11px; padding: 8px 4px; cursor: pointer;
+  padding: 8px 2px; cursor: pointer;
   display: flex; flex-direction: column; align-items: center; gap: 2px;
 }
 .mob-tab.active { color: var(--accent); }
-.mob-tab span.icon { font-size: 18px; line-height: 1; }
-#elliottWave, #fibLevels { display: none !important; }
+.signal-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.signal-pill { padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: bold; }
+.error-panel { background: rgba(255,68,102,.08); border: 1px solid var(--red); border-radius: 8px; padding: 16px; text-align: center; }
+.progress-wrap { background: #0d1526; border-radius: 4px; height: 6px; overflow: hidden; margin-top: 6px; }
+.progress-bar { height: 100%; border-radius: 4px; transition: width .5s; }
+.search-meta { font-size: 10px; color: var(--muted); margin-top: 6px; }
 </style>
 </head>
 <body class="mobile-app">
@@ -138,11 +188,79 @@ body.mobile-app {
     </div>
   </div>
 
-  <!-- 量價 -->
-  <div id="tab-volume" class="mob-panel">
+  <!-- 分析：波浪 / 費波 / 量價 / 凱利 -->
+  <div id="tab-analysis" class="mob-panel">
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>艾略特波浪理論</div>
+      <div id="elliottWave"><div class="loading">等待數據</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>費波那契關鍵位</div>
+      <div id="fibLevels"><div class="loading">等待數據</div></div>
+    </div>
     <div class="panel">
       <div class="panel-title"><div class="dot"></div>量價關係 · 當日與 5 日</div>
       <div id="volumeAnalysis"><div class="loading">等待數據</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>凱利公式 · 倉位控管</div>
+      <div class="kelly-inputs">
+        <div class="input-group">
+          <label class="input-label">總資金 (TWD)</label>
+          <input class="input-field" id="totalCapital" type="number" value="1000000" onchange="calcKelly()">
+        </div>
+        <div class="input-group">
+          <label class="input-label">勝率 W (%)</label>
+          <input class="input-field" id="winRate" type="number" value="55" min="1" max="99" onchange="calcKelly()">
+        </div>
+        <div class="input-group">
+          <label class="input-label">獲利比 R</label>
+          <input class="input-field" id="profitRatio" type="number" value="2.0" step="0.1" onchange="calcKelly()">
+        </div>
+        <div class="input-group">
+          <label class="input-label">最大風險 (%)</label>
+          <input class="input-field" id="maxRisk" type="number" value="2" step="0.5" onchange="calcKelly()">
+        </div>
+      </div>
+      <div class="kelly-result">
+        <div class="kelly-pct" id="kellyPct">-</div>
+        <div class="kelly-detail" id="kellyDetail">請輸入參數</div>
+      </div>
+      <div id="kellyBreakdown" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <!-- 交易：十步驟 / 筆記 / 紀錄 -->
+  <div id="tab-trade" class="mob-panel">
+    <div class="panel">
+      <div class="panel-title">
+        <div class="dot"></div>10 步驟交易 · <span id="symbolBadge" style="color:var(--gold);font-size:10px;">-</span>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-sm btn-gold" type="button" onclick="calcAllSteps()">自動計算</button>
+        <button class="btn btn-sm btn-green" type="button" onclick="saveTrade()">儲存交易</button>
+        <button class="btn btn-sm btn-outline" type="button" onclick="clearSteps()">清除</button>
+      </div>
+      <div class="steps-grid" id="stepsGrid"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>交易筆記</div>
+      <textarea class="journal-area" id="tradeNote" placeholder="進場理由、市場環境…"></textarea>
+      <textarea class="journal-area" id="postNote" placeholder="復盤：結果、心得…"></textarea>
+    </div>
+    <div class="panel">
+      <div class="panel-title">
+        <div class="dot"></div>交易紀錄
+        <button class="btn btn-sm btn-outline" type="button" style="margin-left:auto;" onclick="clearLog()">清除</button>
+      </div>
+      <div style="overflow-x:auto;max-height:240px;overflow-y:auto;">
+        <table class="log-table">
+          <thead>
+            <tr><th>日期</th><th>代號</th><th>方向</th><th>進場</th><th>止損</th><th>止盈</th><th>倉位</th><th>P&L</th><th>狀態</th></tr>
+          </thead>
+          <tbody id="tradeLogBody"><tr><td colspan="9" style="text-align:center;color:var(--muted);padding:16px;">尚無紀錄</td></tr></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -153,10 +271,22 @@ body.mobile-app {
       <div class="grid-2" id="marketOverview"><div class="loading"><span class="spinner"></span>載入中</div></div>
     </div>
     <div class="panel">
-      <div class="panel-title"><div class="dot"></div>市場情緒</div>
+      <div class="panel-title">
+        <div class="dot"></div>市場情緒
+        <button class="btn btn-sm btn-outline" type="button" style="margin-left:auto;" onclick="toggleBbEdit()">更新數值</button>
+      </div>
+      <div id="bbEdit" style="display:none;margin-bottom:10px;background:#0d1526;border:1px solid var(--gold);border-radius:8px;padding:10px;">
+        <div class="hint" style="margin-bottom:8px;">美銀牛熊指標每週公布（0=極空買訊、10=極多賣訊），無免費 API，請手動輸入。</div>
+        <div class="input-label">牛熊值 (0–10)</div>
+        <input class="input-field" id="bbValueInput" type="number" min="0" max="10" step="0.1" placeholder="例 5.4">
+        <button class="btn btn-sm btn-gold" type="button" style="margin-top:6px;" onclick="saveBbValue()">儲存</button>
+      </div>
       <div id="sentimentGrid"><div class="loading">載入中</div></div>
     </div>
   </div>
+
+  <!-- 量價（保留 id 供舊連結，已併入分析分頁） -->
+  <div id="tab-volume" class="mob-panel" style="display:none!important"></div>
 
   <!-- 設定 / 搜尋 -->
   <div id="tab-more" class="mob-panel">
@@ -204,20 +334,18 @@ body.mobile-app {
 
 </main>
 
-<!-- 桌面版才用的隱藏節點（共用 JS） -->
-<div id="elliottWave" style="display:none"></div>
-<div id="fibLevels" style="display:none"></div>
+<!-- 隱藏節點（共用 JS） -->
 <div id="fredSettings" style="display:none"></div>
-<span id="symbolBadge" style="display:none"></span>
 
 <nav class="mob-nav">
   <button type="button" class="mob-tab active" data-tab="quote"><span class="icon">📊</span>標的</button>
-  <button type="button" class="mob-tab" data-tab="volume"><span class="icon">📈</span>量價</button>
+  <button type="button" class="mob-tab" data-tab="analysis"><span class="icon">🌊</span>分析</button>
+  <button type="button" class="mob-tab" data-tab="trade"><span class="icon">📋</span>交易</button>
   <button type="button" class="mob-tab" data-tab="market"><span class="icon">🌐</span>概況</button>
   <button type="button" class="mob-tab" data-tab="more"><span class="icon">⚙️</span>設定</button>
 </nav>
 
-<script src="js/dashboard.js?v=16"></script>
-<script src="js/mobile-ui.js?v=16"></script>
+<script src="js/dashboard.js?v=18"></script>
+<script src="js/mobile-ui.js?v=18"></script>
 </body>
 </html>
