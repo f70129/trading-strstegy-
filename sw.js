@@ -1,4 +1,4 @@
-const CACHE = 'taiwan-trading-v14';
+const CACHE = 'taiwan-trading-v16';
 const ASSETS = ['./manifest.json', './icon.svg'];
 
 self.addEventListener('install', (e) => {
@@ -24,21 +24,25 @@ self.addEventListener('fetch', (e) => {
     e.request.mode === 'navigate' ||
     url.pathname.endsWith('/') ||
     url.pathname.endsWith('.html');
+  const isJs = url.pathname.endsWith('.js') || url.pathname.includes('/js/');
 
-  // HTML：網路優先（永遠取得最新看板），離線時才退回快取
-  if (isDoc) {
+  // HTML / JS：網路優先（避免手機卡在舊版 dashboard.js）
+  if (isDoc || isJs) {
     e.respondWith(
       fetch(e.request)
         .then((resp) => {
-          const copy = resp.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy));
+          if (resp.ok) {
+            const copy = resp.clone();
+            caches.open(CACHE).then((c) => c.put(e.request, copy));
+          }
           return resp;
         })
-        .catch(() => caches.match(e.request).then((c) => c || caches.match('./index.html')))
+        .catch(() =>
+          caches.match(e.request).then((c) => c || (isDoc ? caches.match('./mobile.html') : undefined))
+        )
     );
     return;
   }
 
-  // 其他靜態資源：快取優先
   e.respondWith(caches.match(e.request).then((cached) => cached || fetch(e.request)));
 });

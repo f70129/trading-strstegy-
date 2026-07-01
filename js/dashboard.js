@@ -133,11 +133,22 @@ async function checkProxyHealth() {
 
   if (isCloudDeployed()) {
     try {
-      const r = await fetch(`${cloudFn('fred')}?health=1`, { signal: AbortSignal.timeout(5000) });
-      if (r.ok) {
+      const [fredR, finR] = await Promise.all([
+        fetch(`${cloudFn('fred')}?health=1`, { signal: AbortSignal.timeout(5000) }),
+        fetch(`${cloudFn('finmind')}?health=1`, { signal: AbortSignal.timeout(5000) }),
+      ]);
+      if (fredR.ok && finR.ok) {
+        const fredJ = await fredR.json();
+        const finJ = await finR.json();
+        window._cloudHasFred = !!fredJ.hasKey;
+        window._cloudHasFinMind = !!finJ.hasToken;
+        if (typeof updateMobileTokenStatus === 'function') updateMobileTokenStatus();
         el.className = 'data-badge data-live';
-        el.textContent = '● 雲端代理已就緒';
-        el.title = 'Netlify 函式 · 手機免填 IP · 4G/WiFi 皆可';
+        const builtIn = window._cloudHasFred && window._cloudHasFinMind;
+        el.textContent = builtIn ? '● 雲端已就緒（免填 Token）' : '● 雲端代理已就緒';
+        el.title = builtIn
+          ? 'Netlify 已內建 FinMind + FRED，手機開即用'
+          : 'Netlify 函式 · 若資料失敗請在 Netlify 後台加 FINMIND_TOKEN / FRED_API_KEY';
         return true;
       }
     } catch (_) {}
@@ -178,36 +189,60 @@ function showLoadError(message) {
   setDataStatus('err', '● 資料載入失敗');
 }
 
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
+function setCookie(name, value, days = 400) {
+  const maxAge = days * 86400;
+  if (value) {
+    document.cookie = `${name}=${encodeURIComponent(value)};path=/;max-age=${maxAge};SameSite=Lax`;
+  } else {
+    document.cookie = `${name}=;path=/;max-age=0;SameSite=Lax`;
+  }
+}
+
 function getFinMindToken() {
-  return (localStorage.getItem('finmindToken') || '').trim();
+  return (localStorage.getItem('finmindToken') || getCookie('fm_token') || '').trim();
+}
+
+function isStandalonePWA() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 }
 
 async function fetchFinMind(params) {
   const token = getFinMindToken();
-  if (isCloudDeployed() && !token) {
-    throw new Error('雲端/手機版請至「設定」填入 FinMind Token 並儲存（與電腦本機設定不共用）。');
-  }
   const qs = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => qs.set(k, v));
-  if (token) qs.set('token', token);
 
   const fetchers = [];
-  if (isCloudDeployed() && token) {
-    fetchers.push(() => fetch(`${cloudFn('finmind')}?${qs.toString()}`));
+  if (isCloudDeployed()) {
+    const qCloud = new URLSearchParams(qs);
+    if (token) qCloud.set('token', token);
+    fetchers.push(() => fetch(`${cloudFn('finmind')}?${qCloud.toString()}`));
   } else if (token) {
     fetchers.push(
-      () => fetch(proxyUrl(`/finmind?${qs.toString()}`)),
-      () => fetch(`http://127.0.0.1:8787/finmind?${qs.toString()}`),
-      () => fetch(`http://localhost:8787/finmind?${qs.toString()}`),
+      () => fetch(proxyUrl(`/finmind?${qs.toString()}&token=${encodeURIComponent(token)}`)),
+      () => fetch(`http://127.0.0.1:8787/finmind?${qs.toString()}&token=${encodeURIComponent(token)}`),
+      () => fetch(`http://localhost:8787/finmind?${qs.toString()}&token=${encodeURIComponent(token)}`),
     );
   }
-  fetchers.push(() => fetch(`${FINMIND_API}?${qs.toString()}`));
+  const qDirect = new URLSearchParams(qs);
+  if (token) qDirect.set('token', token);
+  fetchers.push(() => fetch(`${FINMIND_API}?${qDirect.toString()}`));
 
-  let lastErr = 'FinMind 連線失敗';
+  let lastErr = isCloudDeployed() && !token
+    ? 'FinMind 未設定：請在 Netlify 後台加環境變數 FINMIND_TOKEN（手機免填）'
+    : 'FinMind 連線失敗';
   for (const f of fetchers) {
     try {
       const r = await f();
       const json = await r.json();
+      if (json.error) {
+        lastErr = typeof json.error === 'string' ? json.error : json.msg || lastErr;
+        continue;
+      }
       if (json.status === 402 || /upper limit/i.test(json.msg || '')) {
         lastErr = 'FinMind 額度用盡（402）。請於設定填入免費 token。';
         continue;
@@ -498,7 +533,7 @@ const _fredMem = new Map();
 let _fredQueue = Promise.resolve();
 
 function getFredKey() {
-  return (localStorage.getItem('fredApiKey') || '').trim();
+  return (localStorage.getItem('fredApiKey') || getCookie('fred_key') || '').trim();
 }
 
 function saveFredKey(key) {
@@ -507,7 +542,8 @@ function saveFredKey(key) {
     _fredMem.clear();
     try { localStorage.removeItem('fredSeriesCache'); } catch (_) {}
   }
-  localStorage.setItem('fredApiKey', k);
+  try { localStorage.setItem('fredApiKey', k); } catch (_) {}
+  setCookie('fred_key', k);
 }
 
 function fredLsGet() {
@@ -537,29 +573,30 @@ async function fetchWithTimeout(url, ms = 35000) {
 
 async function fetchFredSeriesRaw(seriesId, limit) {
   const key = getFredKey();
-  if (!key) throw new Error('請點右上角 FRED 填入 API Key');
-  const fredUrl =
-    `https://api.stlouisfed.org/fred/series/observations` +
-    `?series_id=${encodeURIComponent(seriesId)}` +
-    `&api_key=${encodeURIComponent(key)}` +
-    `&file_type=json&sort_order=desc&limit=${limit}`;
-
   const q = `series_id=${encodeURIComponent(seriesId)}&limit=${limit}`;
-  const qk = `${q}&key=${encodeURIComponent(key)}`;
+  const qk = key ? `${q}&key=${encodeURIComponent(key)}` : q;
+  const fredUrl = key
+    ? `https://api.stlouisfed.org/fred/series/observations?series_id=${encodeURIComponent(seriesId)}&api_key=${encodeURIComponent(key)}&file_type=json&sort_order=desc&limit=${limit}`
+    : '';
+
   const fetchers = isCloudDeployed()
     ? [
-        () => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 20000).then(toJson),
+        () => fetchWithTimeout(`${cloudFn('fred')}?${q}`, 20000).then(toJson),
+        ...(key ? [() => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 20000).then(toJson)] : []),
         () => fetchWithTimeout(`/api/fred?${qk}`, 20000).then(toJson),
       ]
-    : [
-        () => fetchWithTimeout(proxyUrl(`/fred?${qk}`), 20000).then(toJson),
-        () => fetchWithTimeout(`http://127.0.0.1:8787/fred?${qk}`, 20000).then(toJson),
-        () => fetchWithTimeout(`http://localhost:8787/fred?${qk}`, 20000).then(toJson),
-        () => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 20000).then(toJson),
-        () => fetchWithTimeout(`/api/fred?${qk}`, 20000).then(toJson),
-        () => fetchWithTimeout(`https://api.allorigins.win/raw?url=${encodeURIComponent(fredUrl)}`).then(toJson),
-        () => fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(fredUrl)}`).then(toJsonContents),
-      ];
+    : (() => {
+        if (!key) throw new Error('請點右上角 FRED 填入 API Key');
+        return [
+          () => fetchWithTimeout(proxyUrl(`/fred?${qk}`), 20000).then(toJson),
+          () => fetchWithTimeout(`http://127.0.0.1:8787/fred?${qk}`, 20000).then(toJson),
+          () => fetchWithTimeout(`http://localhost:8787/fred?${qk}`, 20000).then(toJson),
+          () => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 20000).then(toJson),
+          () => fetchWithTimeout(`/api/fred?${qk}`, 20000).then(toJson),
+          () => fetchWithTimeout(`https://api.allorigins.win/raw?url=${encodeURIComponent(fredUrl)}`).then(toJson),
+          () => fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(fredUrl)}`).then(toJsonContents),
+        ];
+      })();
 
   async function toJson(r) {
     if (!r.ok) throw new Error(`代理 HTTP ${r.status}`);
@@ -624,7 +661,9 @@ function toggleFredSettings() {
 }
 
 function saveFinMindToken(token) {
-  localStorage.setItem('finmindToken', (token || '').trim());
+  const t = (token || '').trim();
+  try { localStorage.setItem('finmindToken', t); } catch (_) {}
+  setCookie('fm_token', t);
 }
 
 async function saveFredSettings() {
@@ -2201,11 +2240,12 @@ async function renderSentiment() {
     <div class="stat-card"><div class="loading"><span class="spinner"></span>計算綜合情緒（真實數據）…</div></div>
     ${bofaCardHtml()}`;
 
-  if (!getFredKey()) {
+  const hasFred = getFredKey() || (isCloudDeployed() && window._cloudHasFred);
+  if (!hasFred) {
     grid.innerHTML = `
       <div class="stat-card" style="border-color:var(--gold);">
         <div class="stat-label">自製綜合情緒</div>
-        <div style="color:var(--muted);font-size:12px;margin:10px 0;">需先在右上角 FRED 填入 API Key（用於信用利差、VIX 等真實數據）</div>
+        <div style="color:var(--muted);font-size:12px;margin:10px 0;">需 FRED Key（Netlify 環境變數 FRED_API_KEY，或設定面板填入）</div>
       </div>
       ${bofaCardHtml()}`;
     return;
@@ -2229,19 +2269,32 @@ async function renderSentiment() {
 // INIT
 // =====================================================
 const _urlParams = new URLSearchParams(location.search);
+if (_urlParams.get('finmind_token')) {
+  saveFinMindToken(_urlParams.get('finmind_token'));
+}
 if (_urlParams.get('fred_key')) {
   saveFredKey(_urlParams.get('fred_key'));
+}
+if (_urlParams.get('finmind_token') || _urlParams.get('fred_key')) {
   history.replaceState({}, '', location.pathname + location.hash);
 }
 
-renderSteps();
-if (document.getElementById('tradeLogBody')) renderTradeLog();
-if (document.getElementById('totalCapital')) calcKelly();
-initStockSearch();
-checkProxyHealth();
+async function bootDashboard() {
+  renderSteps();
+  if (document.getElementById('tradeLogBody')) renderTradeLog();
+  if (document.getElementById('totalCapital')) calcKelly();
+  initStockSearch();
+  if (typeof initMobileTabs === 'function') initMobileTabs();
+  if (typeof updateMobileTokenStatus === 'function') updateMobileTokenStatus();
+  await checkProxyHealth();
+  if (typeof updateMobileSettingsUI === 'function') updateMobileSettingsUI();
+  if (typeof updateMobileTokenStatus === 'function') updateMobileTokenStatus();
+  await loadSymbol();
+}
+
+bootDashboard();
+
 setInterval(checkProxyHealth, 60000);
-if (typeof initMobileTabs === 'function') initMobileTabs();
-loadSymbol();
 
 // Refresh every 5 minutes
 setInterval(() => {

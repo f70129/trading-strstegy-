@@ -115,6 +115,7 @@ body.mobile-app {
   <div class="badges">
     <span id="proxyStatus" class="data-badge data-loading">● 代理…</span>
     <span id="dataStatus" class="data-badge data-loading">● 載入中</span>
+    <span id="tokenStatus" class="data-badge data-loading">● Token…</span>
     <span id="clockDisplay" class="data-badge" style="border:1px solid var(--border);color:var(--muted);"></span>
   </div>
 </header>
@@ -170,24 +171,32 @@ body.mobile-app {
       <div id="cloudHint" class="hint" style="display:none;color:var(--green);">
         ✓ 已使用雲端代理，免填 IP、4G/WiFi 皆可，電腦不必開著。
       </div>
+      <div id="cloudSecretHint" class="hint" style="display:none;color:var(--green);">
+        ✓ Netlify 已內建 FinMind + FRED，手機<strong>免填 Token</strong>，開啟即用。
+      </div>
       <div id="proxyHostBlock">
         <label class="input-label">代理位址（僅本機 WiFi 模式）</label>
         <input class="input-field" id="proxyHostInput" placeholder="例 192.168.1.100:8787">
         <div class="hint">本機模式才需填。建議改部署 Netlify，手機直接用網址，免此步驟。</div>
       </div>
-      <label class="input-label">FinMind Token</label>
-      <input class="input-field" id="finmindTokenInput" placeholder="finmindtrade.com 免費 token">
-      <label class="input-label">FRED API Key</label>
-      <input class="input-field" id="fredKeyInput" placeholder="美股 S&P / VIX">
+      <div id="pwaTokenHint" class="hint" style="display:none;color:var(--gold);border:1px solid var(--gold);padding:8px;border-radius:8px;margin-bottom:10px;">
+        ⚠️ 您從<strong>主畫面圖示</strong>開啟。Safari 用連結存的 Token <strong>不會帶進來</strong>，請在此頁填入 Token 並按「儲存」，或改用 Netlify 環境變數（免填）。
+      </div>
+      <div id="tokenSettingsBlock">
+      <label class="input-label">FinMind Token（選填，Netlify 已設定則免填）</label>
+      <input class="input-field" id="finmindTokenInput" placeholder="finmindtrade.com 免費 token" autocomplete="off">
+      <label class="input-label">FRED API Key（選填）</label>
+      <input class="input-field" id="fredKeyInput" placeholder="美股 S&P / VIX" autocomplete="off">
       <button class="btn" type="button" style="width:100%;margin-top:8px;" onclick="saveMobileSettings()">儲存並重新載入</button>
+      </div>
     </div>
     <div class="panel">
       <div class="hint">
         <strong>📱 最便利用法（推薦）</strong><br>
-        部署 Netlify 一次 → 手機開固定網址 → 加入主畫面，像 App 一樣用。<br><br>
+        部署 Netlify 一次 → 在 Netlify 後台設定 Token（見下方說明）→ 手機開網址即用，<strong>不必每支手機填 Token</strong>。<br><br>
         <strong>iPhone</strong>：Safari 開啟 → 分享 → 加入主畫面<br>
         <strong>Android</strong>：Chrome 開啟 → ⋮ → 加入主畫面 / 安裝應用程式<br><br>
-        首次：設定分頁填入 FinMind Token + FRED Key → 儲存（只需一次）<br>
+        首次：若 Netlify 已設環境變數則免設定；否則設定分頁填入 Token<br>
         <a href="index.html" style="color:var(--accent);">→ 電腦完整版</a>
       </div>
     </div>
@@ -208,7 +217,7 @@ body.mobile-app {
   <button type="button" class="mob-tab" data-tab="more"><span class="icon">⚙️</span>設定</button>
 </nav>
 
-<script src="js/dashboard.js?v=12"></script>
-<script src="js/mobile-ui.js?v=12"></script>
+<script src="js/dashboard.js?v=16"></script>
+<script src="js/mobile-ui.js?v=16"></script>
 </body>
 </html>

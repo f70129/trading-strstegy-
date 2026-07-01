@@ -14,12 +14,18 @@ exports.handler = async (event) => {
 
   const params = event.queryStringParameters || {};
   if (params.health === '1') {
-    return respond(200, { ok: true, provider: 'netlify-finmind' }, cors);
+    return respond(200, {
+      ok: true,
+      provider: 'netlify-finmind',
+      hasToken: !!(params.token || process.env.FINMIND_TOKEN),
+    }, cors);
   }
 
-  const token = params.token;
+  const token = params.token || process.env.FINMIND_TOKEN;
   if (!token) {
-    return respond(400, { error: 'token required（請在設定填入 FinMind Token）' }, cors);
+    return respond(400, {
+      error: 'FinMind Token 未設定（Netlify 環境變數 FINMIND_TOKEN，或手機設定填入）',
+    }, cors);
   }
 
   const qs = new URLSearchParams();
