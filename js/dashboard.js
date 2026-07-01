@@ -269,6 +269,12 @@ async function fetchTaiexDailyHistory(days = 90, onProgress) {
   for (let i = 0; i < missing.length; i += 4) {
     const batch = missing.slice(i, i + 4);
     const results = await Promise.allSettled(batch.map(d => fetchTaiexDay(d)));
+    for (const res of results) {
+      if (res.status === 'rejected') {
+        const msg = res.reason?.message || '';
+        if (/FinMind Token|402|雲端\/手機版|upper limit/i.test(msg)) throw res.reason;
+      }
+    }
     results.forEach((res, idx) => {
       if (res.status === 'fulfilled' && res.value) cache[batch[idx]] = res.value;
     });
@@ -1214,10 +1220,13 @@ function detectElliottWave(closes, currentPrice, mas) {
 // KELLY FORMULA
 // =====================================================
 function calcKelly() {
-  const capital = parseFloat(document.getElementById('totalCapital').value) || 1000000;
-  const w = (parseFloat(document.getElementById('winRate').value) || 55) / 100;
-  const r = parseFloat(document.getElementById('profitRatio').value) || 2;
-  const maxRiskPct = parseFloat(document.getElementById('maxRisk').value) || 2;
+  const capEl = document.getElementById('totalCapital');
+  if (!capEl) return null;
+
+  const capital = parseFloat(capEl.value) || 1000000;
+  const w = (parseFloat(document.getElementById('winRate')?.value) || 55) / 100;
+  const r = parseFloat(document.getElementById('profitRatio')?.value) || 2;
+  const maxRiskPct = parseFloat(document.getElementById('maxRisk')?.value) || 2;
 
   const f = (w * r - (1 - w)) / r; // Kelly fraction
   const halfKelly = f / 2;
@@ -1226,12 +1235,15 @@ function calcKelly() {
   const expectedValue = (w * r - (1 - w)) * 100;
 
   const pct = (adjKelly * 100).toFixed(1);
-  document.getElementById('kellyPct').textContent = pct + '%';
-  document.getElementById('kellyDetail').textContent =
-    `建議倉位比例 (半凱利+限制 ${maxRiskPct}%)`;
-
+  const kellyPct = document.getElementById('kellyPct');
+  const kellyDetail = document.getElementById('kellyDetail');
   const breakdown = document.getElementById('kellyBreakdown');
-  breakdown.innerHTML = `
+  if (kellyPct) kellyPct.textContent = pct + '%';
+  if (kellyDetail) {
+    kellyDetail.textContent = `建議倉位比例 (半凱利+限制 ${maxRiskPct}%)`;
+  }
+  if (breakdown) {
+    breakdown.innerHTML = `
     <div class="stat-card">
       <div class="stat-label">期望值 EV</div>
       <div class="stat-value ${expectedValue > 0 ? 'up' : 'down'}">${expectedValue.toFixed(1)}%</div>
@@ -1253,6 +1265,7 @@ function calcKelly() {
       <div class="stat-sub" style="color:var(--muted)">每筆最大虧損上限</div>
     </div>
   `;
+  }
   return { positionSize, adjKelly, capital };
 }
 
@@ -1316,7 +1329,8 @@ function calcAllSteps() {
         ${dir} | R:R = 1:${rr.toFixed(2)}
         ${rr >= 2 ? ' ✅ 良好' : rr >= 1 ? ' ⚠️ 尚可' : ' ❌ 不足'}
       </span>`;
-      document.getElementById('stepNum7').className = 'step-num ' + (rr >= 2 ? 'done' : rr >= 1 ? 'warn' : '');
+      const sn7 = document.getElementById('stepNum7');
+      if (sn7) sn7.className = 'step-num ' + (rr >= 2 ? 'done' : rr >= 1 ? 'warn' : '');
     }
 
     // Step 8: Breakeven
@@ -1329,7 +1343,8 @@ function calcAllSteps() {
         | 風險: ${risk.toFixed(1)} (${(risk/entry*100).toFixed(1)}%)
         | 報酬: ${reward.toFixed(1)} (${(reward/entry*100).toFixed(1)})%
       </span>`;
-      document.getElementById('stepNum8').className = 'step-num done';
+      const sn8 = document.getElementById('stepNum8');
+      if (sn8) sn8.className = 'step-num done';
     }
   }
 
@@ -1338,7 +1353,8 @@ function calcAllSteps() {
     const id = STEPS[n-1].id;
     const el = document.getElementById(id);
     if (el && (el.value || el.textContent !== '-')) {
-      document.getElementById('stepNum'+n).className = 'step-num done';
+      const numEl = document.getElementById('stepNum' + n);
+      if (numEl) numEl.className = 'step-num done';
     }
   });
 }
@@ -1348,7 +1364,8 @@ function calcAllSteps() {
 // =====================================================
 function renderMarketOverview(markets) {
   const el = document.getElementById('marketOverview');
-  el.className = 'grid-4';
+  if (!el) return;
+  if (!el.className.includes('grid')) el.className = 'grid-4';
   el.innerHTML = markets.map(m => `
     <div class="stat-card">
       <div class="stat-label">${m.name}</div>
@@ -1914,7 +1931,7 @@ async function loadSymbol() {
     state.lastCloses = closes;
     state.lastVolumes = volumes.slice();
     renderVolumeAnalysis(closes, volumes);
-    calcKelly();
+    if (document.getElementById('totalCapital')) calcKelly();
 
     const entryEl = document.getElementById('step_entryprice');
     if (entryEl) entryEl.value = price.toFixed(1);
