@@ -1402,15 +1402,52 @@ function calcAllSteps() {
 // =====================================================
 // RENDER MARKET OVERVIEW
 // =====================================================
+// VIX 依絕對水準分級（非多頭/空頭）；數值越低越平靜
+function vixLevel(v) {
+  if (v < 15) return { label: '正常', pillClass: 'bull', valueClass: 'up' };
+  if (v < 20) return { label: '微不穩', pillClass: 'sideways', valueClass: 'gold' };
+  if (v < 30) return { label: '不穩定', pillClass: 'warn', valueClass: 'gold' };
+  return { label: '極度恐慌', pillClass: 'bear', valueClass: 'down' };
+}
+
+function vixLevelPill(level) {
+  if (level.pillClass === 'warn') {
+    return `<span class="signal-pill" style="background:rgba(255,149,0,.15);border:1px solid #ff9500;color:#ff9500;">${level.label}</span>`;
+  }
+  return `<span class="signal-pill ${level.pillClass}">${level.label}</span>`;
+}
+
 function renderMarketOverview(markets) {
   const el = document.getElementById('marketOverview');
   if (!el) return;
   if (!el.className.includes('grid')) el.className = 'grid-4';
-  el.innerHTML = markets.map(m => `
+  el.innerHTML = markets.map(m => {
+    if (m.failed) {
+      return `
     <div class="stat-card">
       <div class="stat-label">${m.name}</div>
-      <div class="stat-value ${m.failed ? 'neutral' : m.change >= 0 ? 'up' : 'down'}">${m.price}</div>
-      ${m.failed ? `<div class="stat-sub" style="color:var(--muted)">${m.hint || '暫無數據'}</div>` : `
+      <div class="stat-value neutral">${m.price}</div>
+      <div class="stat-sub" style="color:var(--muted)">${m.hint || '暫無數據'}</div>
+    </div>`;
+    }
+    if (m.isVix) {
+      const fearEasing = m.change <= 0;
+      return `
+    <div class="stat-card">
+      <div class="stat-label">${m.name}</div>
+      <div class="stat-value ${m.vixValueClass}">${m.price}</div>
+      <div class="stat-sub ${fearEasing ? 'up' : 'down'}">
+        ${m.change >= 0 ? '▲' : '▼'} ${Math.abs(m.change).toFixed(2)} (${Math.abs(m.changePct).toFixed(2)}%) · ${fearEasing ? '恐慌降' : '恐慌升'}
+      </div>
+      <div class="signal-row" style="margin-top:6px;">
+        ${vixLevelPill(m.vixMeta)}
+      </div>
+    </div>`;
+    }
+    return `
+    <div class="stat-card">
+      <div class="stat-label">${m.name}</div>
+      <div class="stat-value ${m.change >= 0 ? 'up' : 'down'}">${m.price}</div>
       <div class="stat-sub ${m.change >= 0 ? 'up' : 'down'}">
         ${m.change >= 0 ? '▲' : '▼'} ${Math.abs(m.change).toFixed(2)} (${m.changePct.toFixed(2)}%)
       </div>
@@ -1419,9 +1456,9 @@ function renderMarketOverview(markets) {
           ${m.trend === 'bull' ? '多頭' : m.trend === 'bear' ? '空頭' : '盤整'}
         </span>
         ${m.above21ma ? '<span class="signal-pill bull">MA21↑</span>' : '<span class="signal-pill bear">MA21↓</span>'}
-      </div>`}
-    </div>
-  `).join('');
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // =====================================================
@@ -2021,6 +2058,19 @@ async function fetchMarketOverviewItem(idx) {
     }
     if (idx.fred) {
       const parsed = await fetchFredSeries(idx.seriesId);
+      if (idx.vix || idx.seriesId === 'VIXCLS') {
+        const meta = vixLevel(parsed.price);
+        return {
+          name: idx.name,
+          price: parsed.price.toFixed(2),
+          change: parsed.change,
+          changePct: parsed.changePct,
+          isVix: true,
+          vixMeta: meta,
+          vixValueClass: meta.valueClass,
+          source: 'FRED',
+        };
+      }
       const mas = calcAllMA(parsed.closes);
       return {
         name: idx.name,
@@ -2051,7 +2101,7 @@ async function loadMarketOverview() {
   const indices = [
     { fred: true, seriesId: 'SP500', name: 'S&P 500' },
     { fred: true, seriesId: 'NASDAQCOM', name: 'NASDAQ' },
-    { fred: true, seriesId: 'VIXCLS', name: 'VIX 恐慌' },
+    { fred: true, seriesId: 'VIXCLS', name: 'VIX 恐慌', vix: true },
     { finmind: true, name: '台股加權' },
   ];
 
