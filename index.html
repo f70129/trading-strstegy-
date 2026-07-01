@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>台指交易分析看板</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a0e1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="台指看板">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #0a0e1a;
+  --panel: #111827;
+  --border: #1f2d40;
+  --accent: #00d4ff;
+  --green: #00ff88;
+  --red: #ff4466;
+  --gold: #ffd700;
+  --orange: #ff9500;
+  --text: #e2e8f0;
+  --muted: #6b7280;
+  --purple: #a78bfa;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: 'Courier New', monospace; font-size: 13px; }
+
+/* Header */
+.header {
+  background: linear-gradient(135deg, #0a0e1a 0%, #1a1f35 100%);
+  border-bottom: 1px solid var(--accent);
+  padding: 12px 20px;
+  display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; z-index: 100;
+}
+.header h1 { font-size: 16px; color: var(--accent); letter-spacing: 2px; }
+.header-right { display: flex; gap: 12px; align-items: center; }
+.symbol-input-wrap { display: flex; gap: 8px; align-items: center; }
+.symbol-input {
+  background: #1a2035; border: 1px solid var(--accent);
+  color: var(--accent); padding: 6px 12px; border-radius: 4px;
+  font-family: inherit; font-size: 14px; width: 130px;
+  text-transform: uppercase; outline: none;
+}
+.symbol-input::placeholder { color: var(--muted); }
+.btn {
+  background: var(--accent); color: #000; border: none; padding: 6px 14px;
+  border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px;
+  font-family: inherit; transition: opacity .2s;
+}
+.btn:hover { opacity: .8; }
+.btn-gold { background: var(--gold); }
+.btn-green { background: var(--green); }
+.btn-red { background: var(--red); }
+.btn-outline { background: transparent; border: 1px solid var(--muted); color: var(--muted); }
+.time-display { color: var(--muted); font-size: 11px; }
+
+/* Layout */
+.main { padding: 16px 20px; display: grid; gap: 14px; }
+
+/* Panels */
+.panel {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px;
+}
+.panel-title {
+  font-size: 11px; color: var(--accent); letter-spacing: 1.5px;
+  text-transform: uppercase; margin-bottom: 12px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px;
+}
+.panel-title .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+/* Grid layouts */
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+
+/* Stat cards */
+.stat-card {
+  background: #0d1526; border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 12px;
+}
+.stat-label { color: var(--muted); font-size: 10px; letter-spacing: 1px; margin-bottom: 4px; }
+.stat-value { font-size: 18px; font-weight: bold; }
+.stat-sub { font-size: 10px; margin-top: 3px; }
+.up { color: var(--green); }
+.down { color: var(--red); }
+.neutral { color: var(--accent); }
+.gold { color: var(--gold); }
+.purple { color: var(--purple); }
+
+/* Trend badge */
+.trend-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: bold;
+}
+.bull { background: rgba(0,255,136,.15); border: 1px solid var(--green); color: var(--green); }
+.bear { background: rgba(255,68,102,.15); border: 1px solid var(--red); color: var(--red); }
+.sideways { background: rgba(255,213,0,.15); border: 1px solid var(--gold); color: var(--gold); }
+
+/* Chart container */
+.chart-wrap { position: relative; height: 200px; }
+
+/* Wave labels */
+.wave-grid {
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  gap: 8px; margin-top: 8px;
+}
+.wave-card {
+  background: #0d1526; border-radius: 6px; padding: 8px;
+  text-align: center; border: 1px solid var(--border);
+}
+.wave-num { font-size: 18px; font-weight: bold; color: var(--gold); }
+.wave-label { font-size: 10px; color: var(--muted); margin-top: 2px; }
+.wave-type { font-size: 11px; margin-top: 4px; }
+
+/* Fibonacci table */
+.fib-table { width: 100%; border-collapse: collapse; }
+.fib-table th {
+  background: #0d1526; color: var(--muted); padding: 6px 10px;
+  font-size: 10px; text-align: left; border-bottom: 1px solid var(--border);
+}
+.fib-table td { padding: 7px 10px; border-bottom: 1px solid #1a2035; font-size: 12px; }
+.fib-table tr:hover td { background: #0d1526; }
+.fib-level-bar {
+  height: 4px; border-radius: 2px; margin-top: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--gold));
+}
+
+/* Kelly formula */
+.kelly-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.input-group { display: flex; flex-direction: column; gap: 4px; }
+.input-label { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+.input-field {
+  background: #0d1526; border: 1px solid var(--border); color: var(--text);
+  padding: 7px 10px; border-radius: 4px; font-family: inherit; font-size: 13px;
+  outline: none; transition: border-color .2s;
+}
+.input-field:focus { border-color: var(--accent); }
+.input-field.highlight { border-color: var(--gold); }
+.kelly-result {
+  background: #0d1526; border: 1px solid var(--gold); border-radius: 6px;
+  padding: 12px; text-align: center;
+}
+.kelly-pct { font-size: 32px; font-weight: bold; color: var(--gold); }
+.kelly-detail { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
+/* 10-step checklist */
+.steps-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.step-item {
+  background: #0d1526; border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start;
+}
+.step-num {
+  width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
+  color: #000; font-size: 11px; font-weight: bold; display: flex;
+  align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px;
+}
+.step-num.done { background: var(--green); }
+.step-num.warn { background: var(--orange); }
+.step-content { flex: 1; }
+.step-title { font-size: 11px; color: var(--accent); margin-bottom: 5px; letter-spacing: .5px; }
+.step-input {
+  background: #0a0e1a; border: 1px solid var(--border); color: var(--text);
+  padding: 5px 8px; border-radius: 3px; font-family: inherit; font-size: 12px;
+  width: 100%; outline: none;
+}
+.step-input:focus { border-color: var(--accent); }
+select.step-input { cursor: pointer; }
+.step-display { font-size: 13px; font-weight: bold; margin-top: 4px; min-height: 20px; }
+
+/* Trade journal */
+.journal-area {
+  background: #0d1526; border: 1px solid var(--border); border-radius: 4px;
+  width: 100%; min-height: 90px; resize: vertical;
+  color: var(--text); padding: 8px 10px; font-family: inherit; font-size: 12px;
+  outline: none; line-height: 1.6;
+}
+.journal-area:focus { border-color: var(--accent); }
+
+/* Trade log table */
+.log-table { width: 100%; border-collapse: collapse; }
+.log-table th {
+  background: #0d1526; color: var(--muted); padding: 6px 10px;
+  font-size: 10px; text-align: left; border-bottom: 1px solid var(--border);
+  letter-spacing: 1px;
+}
+.log-table td { padding: 7px 10px; border-bottom: 1px solid #1a2035; font-size: 12px; }
+.log-table tr:hover td { background: #0d1526; }
+
+/* Loading spinner */
+.loading { color: var(--muted); font-size: 12px; padding: 20px; text-align: center; }
+.spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin .8s linear infinite; margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Signal bar */
+.signal-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.signal-pill {
+  padding: 3px 10px; border-radius: 12px; font-size: 10px; font-weight: bold;
+  letter-spacing: .5px;
+}
+
+/* Progress bar */
+.progress-wrap { background: #0d1526; border-radius: 4px; height: 6px; overflow: hidden; margin-top: 6px; }
+.progress-bar { height: 100%; border-radius: 4px; transition: width .5s; }
+
+.data-badge {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  letter-spacing: .5px;
+}
+.data-live { background: rgba(0,255,136,.15); border: 1px solid var(--green); color: var(--green); }
+.data-error { background: rgba(255,68,102,.15); border: 1px solid var(--red); color: var(--red); }
+.data-loading { background: rgba(0,212,255,.12); border: 1px solid var(--accent); color: var(--accent); }
+.error-panel {
+  background: rgba(255,68,102,.08); border: 1px solid var(--red);
+  border-radius: 8px; padding: 16px; text-align: center; color: var(--red);
+}
+
+/* 個股搜尋 */
+.search-wrap { position: relative; }
+.search-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.search-input {
+  flex: 1; min-width: 180px;
+  background: #0d1526; border: 1px solid var(--border); color: var(--text);
+  padding: 8px 12px; border-radius: 4px; font-family: inherit; font-size: 13px; outline: none;
+}
+.search-input:focus { border-color: var(--accent); }
+.filter-tabs { display: flex; gap: 6px; }
+.filter-tab {
+  background: #0d1526; border: 1px solid var(--border); color: var(--muted);
+  padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 11px; font-family: inherit;
+}
+.filter-tab.active { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,.08); }
+.search-results {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+  background: var(--panel); border: 1px solid var(--accent);
+  border-radius: 6px; max-height: 260px; overflow-y: auto; z-index: 300;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+.search-item {
+  padding: 8px 12px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px;
+  border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.search-item:hover { background: #0d1526; }
+.search-item .code { color: var(--gold); font-weight: bold; min-width: 48px; }
+.search-item .name { flex: 1; }
+.search-item .mkt { font-size: 10px; color: var(--muted); }
+.search-meta { font-size: 10px; color: var(--muted); margin-top: 6px; }
+.fred-status { font-size: 11px; margin-top: 8px; padding: 8px; border-radius: 4px; background: #0d1526; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .grid-4, .grid-5 { grid-template-columns: repeat(2, 1fr); }
+  .grid-3 { grid-template-columns: 1fr 1fr; }
+  .grid-2, .steps-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <h1>📈 台指交易分析看板</h1>
+  <div class="header-right">
+    <div class="symbol-input-wrap">
+      <span style="color:var(--muted);font-size:11px;">代號</span>
+      <input class="symbol-input" id="symbolInput" type="text" placeholder="^TWII / TX" value="^TWII" maxlength="12">
+      <button class="btn btn-outline" type="button" onclick="quickSymbol('^TWII')">加權</button>
+      <button class="btn btn-outline" type="button" onclick="quickSymbol('TX')">台指</button>
+      <button class="btn" onclick="loadSymbol()">載入分析</button>
+      <button class="btn btn-outline" type="button" onclick="toggleFredSettings()">FRED</button>
+      <a href="mobile.html" class="btn btn-outline" style="text-decoration:none;line-height:1.4;">📱手機</a>
+    </div>
+    <div class="time-display" id="clockDisplay"></div>
+    <div id="proxyStatus" class="data-badge data-error" title="即時報價代理">● 代理檢查中…</div>
+    <div id="dataStatus" class="data-badge data-loading">載入中…</div>
+  </div>
+</div>
+
+<!-- 資料來源設定（FRED Key + FinMind Token） -->
+<div id="fredSettings" class="panel" style="display:none;margin:0 20px 0;border-color:var(--gold);">
+  <div class="panel-title"><div class="dot" style="background:var(--gold)"></div>資料來源設定</div>
+
+  <div class="input-group" style="margin-bottom:6px;">
+    <label class="input-label">FinMind Token（台股日線 / 期貨 / 個股清單）</label>
+    <input class="input-field highlight" id="finmindTokenInput" type="text"
+      placeholder="貼上 FinMind 免費 token（eyJ...）">
+  </div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.7;">
+    FinMind 匿名額度（300/小時）常被用爆而回傳 402。請至
+    <strong>finmindtrade.com</strong> 免費註冊取得 token（600/小時、專屬額度）。Token 只存在本機瀏覽器。
+  </div>
+
+  <div class="input-group" style="margin-bottom:6px;">
+    <label class="input-label">FRED API Key（美股 S&amp;P / NASDAQ / VIX）</label>
+    <input class="input-field highlight" id="fredKeyInput" type="text"
+      placeholder="例如 abcd1234...（32 碼）">
+  </div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.7;">
+    Key 只存在你「本機瀏覽器」。<span style="color:var(--orange)">若此網站公開分享，他人可從瀏覽器讀到此 Key。</span>
+  </div>
+
+  <div id="fredTestStatus" class="fred-status" style="display:none;"></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="btn btn-gold" onclick="saveFredSettings()">儲存並重新載入</button>
+    <button class="btn btn-outline" type="button" onclick="testFredConnection()">測試 FRED</button>
+    <button class="btn btn-outline" onclick="toggleFredSettings()">關閉</button>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- 台股搜尋 -->
+  <div class="panel">
+    <div class="panel-title"><div class="dot"></div>台股個股搜尋 · 上市 / 上櫃</div>
+    <div class="search-wrap">
+      <div class="search-row">
+        <input class="search-input" id="stockSearchInput" type="search" autocomplete="off"
+          placeholder="輸入代號或名稱，例：2330、台積電、上櫃 3687">
+        <div class="filter-tabs">
+          <button type="button" class="filter-tab active" data-filter="all" onclick="setStockFilter('all', this)">全部</button>
+          <button type="button" class="filter-tab" data-filter="twse" onclick="setStockFilter('twse', this)">上市</button>
+          <button type="button" class="filter-tab" data-filter="tpex" onclick="setStockFilter('tpex', this)">上櫃</button>
+        </div>
+      </div>
+      <div id="stockSearchResults" class="search-results" style="display:none;"></div>
+      <div class="search-meta" id="stockSearchMeta">載入股票清單中…</div>
+    </div>
+  </div>
+
+  <!-- ROW 1: 市場概況 -->
+  <div class="panel">
+    <div class="panel-title"><div class="dot"></div>全球市場概況 · 趨勢雷達</div>
+    <div class="grid-4" id="marketOverview">
+      <div class="loading"><span class="spinner"></span>載入中...</div>
+    </div>
+  </div>
+
+  <!-- ROW 1.5: 美銀牛熊指標 + 市場情緒 -->
+  <div class="panel">
+    <div class="panel-title">
+      <div class="dot"></div>美銀牛熊指標 · 市場情緒
+      <button class="btn btn-outline" type="button" style="margin-left:auto;font-size:10px;padding:3px 8px;"
+        onclick="toggleBbEdit()">更新數值</button>
+    </div>
+    <div id="bbEdit" style="display:none;margin-bottom:12px;background:#0d1526;border:1px solid var(--gold);border-radius:6px;padding:10px;">
+      <div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:8px;">
+        美銀牛熊指標為美銀每週公布的數值（0=極度看空買訊、10=極度看多賣訊），無免費 API，請手動輸入最新值。
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+        <div class="input-group" style="flex:1;min-width:120px;">
+          <label class="input-label">牛熊值 (0–10)</label>
+          <input class="input-field highlight" id="bbValueInput" type="number" min="0" max="10" step="0.1" placeholder="例 5.4">
+        </div>
+        <button class="btn btn-gold" type="button" onclick="saveBbValue()">儲存</button>
+      </div>
+    </div>
+    <div class="grid-2" id="sentimentGrid">
+      <div class="loading">載入情緒指標…</div>
+    </div>
+  </div>
+
+  <!-- ROW 2: 目標標的資訊 + 趨勢判斷 -->
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>目標標的 · <span id="targetSymbolTitle" style="color:var(--gold)">-</span></div>
+      <div id="targetInfo"><div class="loading"><span class="spinner"></span>請輸入代號並點擊載入</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>趨勢判斷系統</div>
+      <div id="trendSystem"><div class="loading"><span class="spinner"></span>等待數據...</div></div>
+    </div>
+  </div>
+
+  <!-- ROW 3: K線圖 -->
+  <div class="panel">
+    <div class="panel-title"><div class="dot"></div>價格走勢 · 均線系統</div>
+    <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
+  </div>
+
+  <!-- ROW 4: 波浪理論 + 費波那契 -->
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>艾略特波浪理論分析</div>
+      <div id="elliottWave"><div class="loading">等待數據...</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>黃金切割 · 費波那契關鍵位</div>
+      <div id="fibLevels"><div class="loading">等待數據...</div></div>
+    </div>
+  </div>
+
+  <!-- ROW 4.5: 量價關係 -->
+  <div class="panel">
+    <div class="panel-title"><div class="dot"></div>量價關係判定 · 當日與連續 5 日</div>
+    <div id="volumeAnalysis"><div class="loading">等待數據...</div></div>
+  </div>
+
+  <!-- ROW 5: 凱利公式 -->
+  <div class="panel">
+    <div class="panel-title"><div class="dot"></div>凱利公式 · 倉位資金控管</div>
+    <div class="grid-2">
+      <div>
+        <div class="kelly-inputs">
+          <div class="input-group">
+            <label class="input-label">總資金 (TWD)</label>
+            <input class="input-field highlight" id="totalCapital" type="number" value="1000000" onchange="calcKelly()">
+          </div>
+          <div class="input-group">
+            <label class="input-label">勝率 W (%)</label>
+            <input class="input-field" id="winRate" type="number" value="55" min="1" max="99" onchange="calcKelly()">
+          </div>
+          <div class="input-group">
+            <label class="input-label">平均獲利比 R</label>
+            <input class="input-field" id="profitRatio" type="number" value="2.0" step="0.1" onchange="calcKelly()">
+          </div>
+          <div class="input-group">
+            <label class="input-label">最大單筆風險 (%)</label>
+            <input class="input-field" id="maxRisk" type="number" value="2" step="0.5" onchange="calcKelly()">
+          </div>
+        </div>
+        <div class="kelly-result" id="kellyResult">
+          <div class="kelly-pct" id="kellyPct">-</div>
+          <div class="kelly-detail" id="kellyDetail">請輸入參數計算</div>
+        </div>
+      </div>
+      <div id="kellyBreakdown" style="display:flex;flex-direction:column;gap:8px;justify-content:center;">
+        <div class="loading">計算中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 6: 10步驟交易系統 -->
+  <div class="panel">
+    <div class="panel-title">
+      <div class="dot"></div>
+      10步驟交易執行系統 ·
+      <span style="color:var(--gold);font-size:10px;" id="symbolBadge">-</span>
+      <div style="margin-left:auto;display:flex;gap:8px;">
+        <button class="btn btn-gold" onclick="calcAllSteps()">自動計算</button>
+        <button class="btn btn-green" onclick="saveTrade()">儲存交易</button>
+        <button class="btn btn-outline" onclick="clearSteps()">清除</button>
+      </div>
+    </div>
+    <div class="steps-grid" id="stepsGrid">
+      <!-- Steps rendered by JS -->
+    </div>
+  </div>
+
+  <!-- ROW 7: 交易筆記 + 復盤 -->
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>交易筆記</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <textarea class="journal-area" id="tradeNote" placeholder="記錄進場理由、市場環境、心理狀態..."></textarea>
+        <textarea class="journal-area" id="postNote" placeholder="復盤：實際結果、學到什麼、下次改進..." style="min-height:70px;"></textarea>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">
+        <div class="dot"></div>交易紀錄
+        <button class="btn btn-outline" style="margin-left:auto;font-size:10px;padding:3px 8px;" onclick="clearLog()">清除紀錄</button>
+      </div>
+      <div style="overflow-x:auto;max-height:220px;overflow-y:auto;">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>日期</th><th>代號</th><th>方向</th><th>進場</th>
+              <th>止損</th><th>止盈</th><th>倉位%</th><th>P&L</th><th>狀態</th>
+            </tr>
+          </thead>
+          <tbody id="tradeLogBody"><tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px;">尚無紀錄</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<script src="js/dashboard.js"></script>
+</body>
+</html>
