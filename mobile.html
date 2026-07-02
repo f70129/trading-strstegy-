@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script>
 (function(){
-  var V='20';
+  var V='21';
   if (localStorage.getItem('app_ver') === V) return;
   localStorage.setItem('app_ver', V);
   var reload = function(){ location.reload(); };
@@ -201,6 +201,10 @@ body.mobile-app {
       <div id="fibLevels"><div class="loading">等待數據</div></div>
     </div>
     <div class="panel">
+      <div class="panel-title"><div class="dot"></div>赫斯特週期預測</div>
+      <div id="hurstCycles"><div class="loading">等待數據</div></div>
+    </div>
+    <div class="panel">
       <div class="panel-title"><div class="dot"></div>量價關係 · 當日與 5 日</div>
       <div id="volumeAnalysis"><div class="loading">等待數據</div></div>
     </div>
@@ -347,7 +351,7 @@ body.mobile-app {
   <button type="button" class="mob-tab" data-tab="more"><span class="icon">⚙️</span>設定</button>
 </nav>
 
-<script src="js/mobile-ui.js?v=20"></script>
-<script src="js/dashboard.js?v=20"></script>
+<script src="js/mobile-ui.js?v=21"></script>
+<script src="js/dashboard.js?v=21"></script>
 </body>
 </html>

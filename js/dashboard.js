@@ -186,6 +186,7 @@ function showLoadError(message) {
   setHtml('trendSystem', html);
   setHtml('elliottWave', html);
   setHtml('fibLevels', html);
+  if (document.getElementById('hurstCycles')) setHtml('hurstCycles', html);
   if (document.getElementById('volumeAnalysis')) setHtml('volumeAnalysis', html);
   setDataStatus('err', '● 資料載入失敗');
 }
@@ -1257,6 +1258,223 @@ function detectElliottWave(closes, currentPrice, mas) {
 }
 
 // =====================================================
+// HURST CYCLE (赫斯特週期)
+// =====================================================
+const HURST_NOMINAL = [
+  { days: 5, label: '5日', desc: '週線' },
+  { days: 10, label: '10日', desc: '雙週' },
+  { days: 20, label: '20日', desc: '月線' },
+  { days: 40, label: '40日', desc: '雙月' },
+  { days: 80, label: '80日', desc: '季線' },
+];
+
+function calcMASeries(arr, period) {
+  const out = new Array(arr.length).fill(null);
+  for (let i = period - 1; i < arr.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += arr[j];
+    out[i] = sum / period;
+  }
+  return out;
+}
+
+function hurstAutocorr(series, lag) {
+  const segLen = Math.min(series.length, lag * 6);
+  if (segLen < lag + 8) return 0;
+  const use = series.slice(-segLen);
+  const mean = use.reduce((a, b) => a + b, 0) / use.length;
+  let num = 0, d1 = 0, d2 = 0;
+  const len = use.length - lag;
+  for (let i = 0; i < len; i++) {
+    const x = use[i] - mean;
+    const y = use[i + lag] - mean;
+    num += x * y;
+    d1 += x * x;
+    d2 += y * y;
+  }
+  const den = Math.sqrt(d1 * d2);
+  return den ? num / den : 0;
+}
+
+function hurstFindSwings(series, halfWindow) {
+  const w = Math.max(2, halfWindow);
+  const swings = [];
+  for (let i = w; i < series.length - w; i++) {
+    let hi = true, lo = true;
+    for (let k = 1; k <= w; k++) {
+      if (series[i] <= series[i - k] || series[i] <= series[i + k]) hi = false;
+      if (series[i] >= series[i - k] || series[i] >= series[i + k]) lo = false;
+    }
+    if (hi) swings.push({ i, type: 'peak' });
+    if (lo) swings.push({ i, type: 'trough' });
+  }
+  return swings;
+}
+
+function hurstPhaseLabel(pct) {
+  if (pct < 12.5 || pct >= 87.5) {
+    return { label: '谷底區', cls: 'bull', action: '週期低點區，留意築底反彈' };
+  }
+  if (pct < 37.5) return { label: '上升段', cls: 'bull', action: '週期上升，偏多操作' };
+  if (pct < 62.5) return { label: '峰頂區', cls: 'bear', action: '週期高點區，留意回檔' };
+  return { label: '下降段', cls: 'bear', action: '週期下降，偏空或觀望' };
+}
+
+function addTradingDays(baseMs, days) {
+  const d = new Date(baseMs);
+  let left = Math.max(0, Math.round(days));
+  while (left > 0) {
+    d.setDate(d.getDate() + 1);
+    if (d.getDay() !== 0 && d.getDay() !== 6) left--;
+  }
+  return d;
+}
+
+function fmtCycleDate(ms) {
+  return new Date(ms).toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' });
+}
+
+function analyzeHurstCycles(closes, timestamps) {
+  if (!closes || closes.length < 40) return null;
+
+  const detrendPeriod = Math.min(80, Math.floor(closes.length / 2));
+  const ma = calcMASeries(closes, detrendPeriod);
+  const detrended = closes.map((c, i) => (ma[i] != null ? c - ma[i] : 0));
+  const startIdx = detrendPeriod - 1;
+  const dt = detrended.slice(startIdx);
+  const lastIdx = closes.length - 1;
+  const lastTs = timestamps?.[lastIdx] ? timestamps[lastIdx] * 1000 : Date.now();
+
+  const cycles = HURST_NOMINAL.filter(c => c.days * 3 <= dt.length).map(c => {
+    const strength = hurstAutocorr(dt, c.days);
+    const swings = hurstFindSwings(dt, Math.max(2, Math.floor(c.days / 5)));
+    const lastTrough = [...swings].reverse().find(s => s.type === 'trough');
+
+    let daysSinceTrough = Math.round(c.days / 2);
+    if (lastTrough) {
+      daysSinceTrough = lastIdx - (startIdx + lastTrough.i);
+    }
+    const pos = ((daysSinceTrough % c.days) + c.days) % c.days;
+    const phasePct = (pos / c.days) * 100;
+    const half = c.days / 2;
+    const phase = hurstPhaseLabel(phasePct);
+
+    let daysToPeak, daysToTrough;
+    if (pos < half) {
+      daysToPeak = Math.round(half - pos);
+      daysToTrough = Math.round(c.days - pos);
+    } else {
+      daysToTrough = Math.round(c.days - pos);
+      daysToPeak = Math.round(half + (half - (pos - half)));
+    }
+
+    return {
+      ...c,
+      strength,
+      phasePct,
+      phase,
+      daysToPeak,
+      daysToTrough,
+      nextPeak: fmtCycleDate(addTradingDays(lastTs, daysToPeak).getTime()),
+      nextTrough: fmtCycleDate(addTradingDays(lastTs, daysToTrough).getTime()),
+    };
+  }).sort((a, b) => b.strength - a.strength);
+
+  if (!cycles.length) return null;
+
+  const primary = cycles[0];
+  const troughZoneCount = cycles.filter(c => c.phase.label === '谷底區').length;
+  const peakZoneCount = cycles.filter(c => c.phase.label === '峰頂區').length;
+  let syncNote = '';
+  if (troughZoneCount >= 2) {
+    syncNote = `${troughZoneCount} 個週期同步於谷底區 — 赫斯特同步律：可能見底反彈`;
+  } else if (peakZoneCount >= 2) {
+    syncNote = `${peakZoneCount} 個週期同步於峰頂區 — 可能見高回落`;
+  }
+
+  const top3 = cycles.slice(0, 3);
+  const compositePct = top3.reduce((s, c) => s + c.phasePct, 0) / top3.length;
+  const compositePhase = hurstPhaseLabel(compositePct);
+
+  return { cycles, primary, syncNote, compositePhase, compositePct, dataBars: closes.length };
+}
+
+function renderHurstCycles(hurst) {
+  const el = document.getElementById('hurstCycles');
+  if (!el) return;
+  if (!hurst) {
+    el.innerHTML = '<div class="loading">數據不足（需至少 40 根 K 線）</div>';
+    return;
+  }
+
+  const p = hurst.primary;
+  const phaseColor = p.phase.cls === 'bull' ? 'var(--green)' : p.phase.cls === 'bear' ? 'var(--red)' : 'var(--gold)';
+
+  el.innerHTML = `
+    <div class="signal-row" style="margin-bottom:10px;">
+      <span class="trend-badge ${p.phase.cls}" style="font-size:13px;">
+        主週期 <strong>${p.label}</strong> · ${p.phase.label}
+      </span>
+      <span class="signal-pill sideways">強度 ${(p.strength * 100).toFixed(0)}%</span>
+    </div>
+    <div class="stat-card" style="margin-bottom:10px;border-color:var(--gold);">
+      <div class="stat-label">週期相位 · ${p.desc}（${p.days} 交易日）</div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin:6px 0;">
+        <span class="stat-value" style="font-size:26px;color:${phaseColor};">${p.phasePct.toFixed(0)}%</span>
+        <span style="font-size:11px;color:var(--muted);">0% 谷底 → 50% 峰頂 → 100% 谷底</span>
+      </div>
+      <div class="progress-wrap" style="height:12px;">
+        <div class="progress-bar" style="width:${Math.min(100, p.phasePct)}%;background:${phaseColor};"></div>
+      </div>
+      <div style="font-size:12px;color:var(--accent);margin-top:8px;">${p.phase.action}</div>
+    </div>
+    <div class="grid-2" style="gap:8px;margin-bottom:10px;">
+      <div class="stat-card">
+        <div class="stat-label">預估下一峰頂</div>
+        <div class="stat-value up" style="font-size:16px;">${p.nextPeak}</div>
+        <div class="stat-sub" style="color:var(--muted);">約 ${p.daysToPeak} 個交易日</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">預估下一谷底</div>
+        <div class="stat-value down" style="font-size:16px;">${p.nextTrough}</div>
+        <div class="stat-sub" style="color:var(--muted);">約 ${p.daysToTrough} 個交易日</div>
+      </div>
+    </div>
+    ${hurst.syncNote ? `<div class="stat-card" style="margin-bottom:10px;border-color:var(--accent);">
+      <div class="stat-label">赫斯特同步律</div>
+      <div style="font-size:12px;color:var(--accent);">${hurst.syncNote}</div>
+    </div>` : ''}
+    <div class="stat-card">
+      <div class="stat-label">綜合相位（前 3 強週期平均 · ${hurst.compositePhase.label}）</div>
+      <div class="progress-wrap" style="height:8px;margin-top:6px;">
+        <div class="progress-bar" style="width:${hurst.compositePct.toFixed(0)}%;background:${hurst.compositePhase.cls === 'bull' ? 'var(--green)' : 'var(--red)'};"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;overflow-x:auto;">
+      <table class="fib-table" style="min-width:100%;">
+        <thead>
+          <tr>
+            <th>週期</th><th>強度</th><th>相位</th><th>階段</th><th>下一峰</th><th>下一谷</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${hurst.cycles.map(c => `
+          <tr>
+            <td class="gold">${c.label}<span style="color:var(--muted);font-size:9px;"> ${c.desc}</span></td>
+            <td>${(c.strength * 100).toFixed(0)}%</td>
+            <td>${c.phasePct.toFixed(0)}%</td>
+            <td><span class="signal-pill ${c.phase.cls}" style="font-size:9px;padding:2px 6px;">${c.phase.label}</span></td>
+            <td style="font-size:10px;">${c.nextPeak}</td>
+            <td style="font-size:10px;">${c.nextTrough}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="search-meta">JM Hurst 週期分析 · 去趨勢後自相關 + 嵌套週期（5→10→20→40→80 日）· 依 ${hurst.dataBars} 根 K 線</div>
+  `;
+}
+
+// =====================================================
 // KELLY FORMULA
 // =====================================================
 function calcKelly() {
@@ -1933,6 +2151,7 @@ async function loadSymbol() {
   setHtml('trendSystem', '<div class="loading"><span class="spinner"></span>分析趨勢...</div>');
   setHtml('elliottWave', '<div class="loading"><span class="spinner"></span>辨識波浪...</div>');
   setHtml('fibLevels', '<div class="loading"><span class="spinner"></span>計算費波那契...</div>');
+  setHtml('hurstCycles', '<div class="loading"><span class="spinner"></span>分析赫斯特週期...</div>');
   document.getElementById('symbolBadge').textContent = state.symbol;
   setDataStatus('loading', '● 載入真實數據…');
 
@@ -2000,6 +2219,9 @@ async function loadSymbol() {
 
     const wave = detectElliottWave(closes, price, mas);
     renderElliottWave(wave);
+
+    const hurst = analyzeHurstCycles(closes, timestamps);
+    renderHurstCycles(hurst);
 
     const fibs = calcFib(priceData.high52, priceData.low52);
     renderFib(fibs, price, priceData.high52, priceData.low52);
