@@ -27,12 +27,20 @@ exports.handler = async (event) => {
     return respond(400, { error: 'FRED Key 未設定（設定面板填入，或 Netlify 環境變數 FRED_API_KEY）' }, cors);
   }
 
-  const limit = params.limit || '120';
-  const fredUrl =
+  const limit = params.limit || '';
+  const obsStart = params.observation_start || '';
+  const obsEnd = params.observation_end || '';
+  let fredUrl =
     `https://api.stlouisfed.org/fred/series/observations` +
     `?series_id=${encodeURIComponent(seriesId)}` +
     `&api_key=${encodeURIComponent(apiKey)}` +
-    `&file_type=json&sort_order=desc&limit=${limit}`;
+    `&file_type=json`;
+  if (obsStart) {
+    fredUrl += `&observation_start=${encodeURIComponent(obsStart)}&sort_order=asc`;
+    if (obsEnd) fredUrl += `&observation_end=${encodeURIComponent(obsEnd)}`;
+  } else {
+    fredUrl += `&sort_order=desc&limit=${limit || '120'}`;
+  }
 
   try {
     const r = await fetch(fredUrl);

@@ -651,6 +651,105 @@ async function fetchFredSeries(seriesId, limit = 120) {
   return data;
 }
 
+/** FRED 歷史區間（季節性分析用） */
+async function fetchFredHistorical(seriesId, startDate, endDate) {
+  const cacheKey = `hist_${seriesId}_${startDate}_${endDate}`;
+  const ls = fredLsGet()[cacheKey];
+  if (ls && Date.now() - ls.ts < 86400000) return ls.bars;
+
+  const key = getFredKey();
+  const q = `series_id=${encodeURIComponent(seriesId)}&observation_start=${startDate}&observation_end=${endDate}`;
+  const qk = key ? `${q}&key=${encodeURIComponent(key)}` : q;
+
+  const fetchers = isCloudDeployed()
+    ? [() => fetchWithTimeout(`${cloudFn('fred')}?${q}`, 45000).then(r => r.json())]
+    : key
+      ? [
+          () => fetchWithTimeout(proxyUrl(`/fred?${qk}`), 45000).then(r => r.json()),
+          () => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 45000).then(r => r.json()),
+        ]
+      : [];
+
+  if (!fetchers.length) throw new Error('需 FRED API Key');
+
+  let lastErr = 'FRED 歷史資料載入失敗';
+  for (const f of fetchers) {
+    try {
+      const json = await f();
+      const obs = (json.observations || [])
+        .filter(o => o.value !== '.' && !Number.isNaN(parseFloat(o.value)))
+        .map(o => ({ date: o.date, close: parseFloat(o.value) }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+      if (obs.length < 100) throw new Error('資料不足');
+      fredLsSet(cacheKey, { bars: obs, ts: Date.now() });
+      return obs;
+    } catch (e) {
+      lastErr = e.message || lastErr;
+    }
+  }
+  throw new Error(lastErr);
+}
+
+/** 台股加權指數歷史（FinMind TaiwanStockPriceIndex） */
+async function fetchTaiexIndexHistorical(startDate, endDate) {
+  const cacheKey = `taiex_hist_${startDate}_${endDate}`;
+  try {
+    const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+    if (cached && Date.now() - cached.ts < 86400000) return cached.bars;
+  } catch (_) { /* ignore */ }
+
+  let rows = [];
+  try {
+    rows = await fetchFinMind({
+      dataset: 'TaiwanStockPriceIndex',
+      data_id: 'TAIEX',
+      start_date: startDate,
+      end_date: endDate,
+    });
+  } catch (_) {
+    rows = await fetchFinMind({
+      dataset: 'TaiwanStockPriceIndex',
+      data_id: 'TSE',
+      start_date: startDate,
+      end_date: endDate,
+    });
+  }
+
+  const bars = (rows || [])
+    .map(r => ({
+      date: String(r.date).slice(0, 10),
+      close: parseFloat(r.close ?? r.TAIEX ?? r.value),
+    }))
+    .filter(r => r.date && Number.isFinite(r.close) && r.close > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (bars.length < 100) {
+    const chunked = [];
+    for (let y = parseInt(startDate.slice(0, 4), 10); y <= parseInt(endDate.slice(0, 4), 10); y++) {
+      const part = await fetchFinMind({
+        dataset: 'TaiwanStockPriceIndex',
+        data_id: 'TAIEX',
+        start_date: `${y}-01-01`,
+        end_date: `${y}-12-31`,
+      }).catch(() => []);
+      for (const r of part || []) {
+        chunked.push({
+          date: String(r.date).slice(0, 10),
+          close: parseFloat(r.close ?? r.TAIEX),
+        });
+      }
+      await new Promise(res => setTimeout(res, 200));
+    }
+    const merged = chunked.filter(r => r.date && Number.isFinite(r.close)).sort((a, b) => a.date.localeCompare(b.date));
+    if (merged.length < 100) throw new Error('台股加權歷史資料不足');
+    localStorage.setItem(cacheKey, JSON.stringify({ bars: merged, ts: Date.now() }));
+    return merged;
+  }
+
+  localStorage.setItem(cacheKey, JSON.stringify({ bars, ts: Date.now() }));
+  return bars;
+}
+
 function toggleFredSettings() {
   const el = document.getElementById('fredSettings');
   const show = el.style.display === 'none';

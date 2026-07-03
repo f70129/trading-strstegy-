@@ -264,6 +264,15 @@ select.step-input { cursor: pointer; }
   .grid-3 { grid-template-columns: 1fr 1fr; }
   .grid-2, .steps-grid { grid-template-columns: 1fr; }
 }
+.seasonal-tabs { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.seasonal-tab {
+  background: #0d1526; border: 1px solid var(--border); color: var(--muted);
+  padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: inherit;
+}
+.seasonal-tab.active { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,.08); }
+.seasonal-chart { height: 320px; margin: 10px 0; }
+.seasonal-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.seasonal-table tr.seasonal-current-month td { background: rgba(0,212,255,.08); }
 </style>
 </head>
 <body>
@@ -345,6 +354,23 @@ select.step-input { cursor: pointer; }
     <div class="grid-4" id="marketOverview">
       <div class="loading"><span class="spinner"></span>載入中...</div>
     </div>
+  </div>
+
+  <!-- ROW 1.3: 季節性型態 STA -->
+  <div class="panel" id="seasonalPanel">
+    <div class="panel-title">
+      <div class="dot"></div>季節性型態 · Seasonal Pattern（2000–2025 真實數據）
+      <button class="btn btn-outline" type="button" id="seasonalToggleYears" style="margin-left:auto;font-size:10px;padding:3px 8px;" onclick="toggleSeasonalYearLines()">隱藏個別年份線</button>
+    </div>
+    <div class="seasonal-tabs">
+      <button type="button" class="seasonal-tab" data-market="twii" onclick="switchSeasonalMarket('twii')">🇹🇼 台股加權</button>
+      <button type="button" class="seasonal-tab active" data-market="sp500" onclick="switchSeasonalMarket('sp500')">🇺🇸 S&amp;P 500</button>
+    </div>
+    <div id="seasonalStatus" class="search-meta" style="margin-bottom:8px;"><span class="spinner"></span>載入 2000–2025 真實歷史…</div>
+    <div id="seasonalElectionLegend"></div>
+    <div class="chart-wrap seasonal-chart"><canvas id="seasonalChart"></canvas></div>
+    <div id="seasonalAiAdvice"></div>
+    <div id="seasonalMonthlyTable"></div>
   </div>
 
   <!-- ROW 1.5: 美銀牛熊指標 + 市場情緒 -->
@@ -494,6 +520,7 @@ select.step-input { cursor: pointer; }
 
 </div><!-- /main -->
 
-<script src="js/dashboard.js?v=21"></script>
+<script src="js/dashboard.js?v=22"></script>
+<script src="js/seasonal.js?v=22"></script>
 </body>
 </html>

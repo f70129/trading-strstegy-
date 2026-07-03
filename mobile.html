@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script>
 (function(){
-  var V='21';
+  var V='22';
   if (localStorage.getItem('app_ver') === V) return;
   localStorage.setItem('app_ver', V);
   var reload = function(){ location.reload(); };
@@ -152,6 +152,15 @@ body.mobile-app {
 .progress-wrap { background: #0d1526; border-radius: 4px; height: 6px; overflow: hidden; margin-top: 6px; }
 .progress-bar { height: 100%; border-radius: 4px; transition: width .5s; }
 .search-meta { font-size: 10px; color: var(--muted); margin-top: 6px; }
+.seasonal-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.seasonal-tab {
+  flex: 1; background: #0d1526; border: 1px solid var(--border); color: var(--muted);
+  padding: 10px 6px; border-radius: 8px; font-size: 12px; min-height: 44px;
+}
+.seasonal-tab.active { border-color: var(--accent); color: var(--accent); }
+.seasonal-chart { height: 260px; margin: 8px 0; }
+.seasonal-legend { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.seasonal-table tr.seasonal-current-month td { background: rgba(0,212,255,.08); }
 </style>
 </head>
 <body class="mobile-app">
@@ -289,6 +298,21 @@ body.mobile-app {
       </div>
       <div id="sentimentGrid"><div class="loading">載入中</div></div>
     </div>
+    <div class="panel" id="seasonalPanel">
+      <div class="panel-title">
+        <div class="dot"></div>季節性型態 · 2000–2025
+        <button class="btn btn-sm btn-outline" type="button" id="seasonalToggleYears" style="margin-left:auto;" onclick="toggleSeasonalYearLines()">隱藏年份線</button>
+      </div>
+      <div class="seasonal-tabs">
+        <button type="button" class="seasonal-tab" data-market="twii" onclick="switchSeasonalMarket('twii')">🇹🇼 台股</button>
+        <button type="button" class="seasonal-tab active" data-market="sp500" onclick="switchSeasonalMarket('sp500')">🇺🇸 S&amp;P</button>
+      </div>
+      <div id="seasonalStatus" class="hint"><span class="spinner"></span>載入中…</div>
+      <div id="seasonalElectionLegend"></div>
+      <div class="chart-wrap seasonal-chart"><canvas id="seasonalChart"></canvas></div>
+      <div id="seasonalAiAdvice"></div>
+      <div id="seasonalMonthlyTable"></div>
+    </div>
   </div>
 
   <!-- 量價（保留 id 供舊連結，已併入分析分頁） -->
@@ -351,7 +375,8 @@ body.mobile-app {
   <button type="button" class="mob-tab" data-tab="more"><span class="icon">⚙️</span>設定</button>
 </nav>
 
-<script src="js/mobile-ui.js?v=21"></script>
-<script src="js/dashboard.js?v=21"></script>
+<script src="js/mobile-ui.js?v=22"></script>
+<script src="js/dashboard.js?v=22"></script>
+<script src="js/seasonal.js?v=22"></script>
 </body>
 </html>
