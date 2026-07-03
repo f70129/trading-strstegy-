@@ -525,6 +525,139 @@ async function fetchYahooChart(ySymbol) {
   return null;
 }
 
+/** Yahoo Chart JSON → [{date, close}]（季節性分析用） */
+function yahooChartToBars(json, startDate, endDate) {
+  const r = json?.chart?.result?.[0];
+  if (!r) return [];
+  const quotes = r.indicators?.quote?.[0];
+  const ts = r.timestamp || [];
+  const closes = quotes?.close || [];
+  const bars = [];
+  for (let i = 0; i < ts.length; i++) {
+    const c = closes[i];
+    if (c == null || !(c > 0)) continue;
+    const date = new Date(ts[i] * 1000).toISOString().slice(0, 10);
+    if (startDate && date < startDate) continue;
+    if (endDate && date > endDate) continue;
+    bars.push({ date, close: c });
+  }
+  return bars.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** 經 CORS 代理抓 Yahoo Chart（季節性長歷史用） */
+async function fetchYahooChartJson(targetUrl) {
+  const proxies = [
+    async (url) => {
+      const r = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(url)}`, 60000);
+      if (!r.ok) throw new Error('corsproxy');
+      return r.json();
+    },
+    async (url) => {
+      const r = await fetchWithTimeout(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, 60000);
+      if (!r.ok) throw new Error('allorigins-raw');
+      return r.json();
+    },
+    async (url) => {
+      const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`);
+      if (!r.ok) throw new Error('allorigins-get');
+      const data = await r.json();
+      return JSON.parse(data.contents);
+    },
+    async (url) => {
+      const r = await fetch(url, { mode: 'cors' });
+      if (!r.ok) throw new Error('direct');
+      return r.json();
+    },
+  ];
+  let lastErr = 'Yahoo 連線失敗';
+  for (const proxy of proxies) {
+    try {
+      const json = await proxy(targetUrl);
+      if (json?.chart?.result?.[0]) return json;
+      lastErr = 'Yahoo 回傳空資料';
+    } catch (e) {
+      lastErr = e.message || lastErr;
+    }
+  }
+  throw new Error(lastErr);
+}
+
+async function fetchSp500ByYearChunks(startDate, endDate) {
+  const sym = encodeURIComponent('^GSPC');
+  const merged = [];
+  const y0 = parseInt(startDate.slice(0, 4), 10);
+  const y1 = parseInt(endDate.slice(0, 4), 10);
+  for (let y = y0; y <= y1; y++) {
+    const p1 = Math.floor(new Date(`${y}-01-01T12:00:00`).getTime() / 1000);
+    const p2 = Math.floor(new Date(`${y}-12-31T23:59:59`).getTime() / 1000);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&period1=${p1}&period2=${p2}&includePrePost=false`;
+    try {
+      const json = await fetchYahooChartJson(url);
+      merged.push(...yahooChartToBars(json, startDate, endDate));
+    } catch (_) { /* skip year */ }
+    await new Promise(r => setTimeout(r, 250));
+  }
+  const dedup = {};
+  for (const b of merged) dedup[b.date] = b;
+  return Object.values(dedup).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** S&P 500 完整歷史（2000–2025）· Yahoo ^GSPC 為主，FRED 為輔 */
+async function fetchSp500Historical(startDate, endDate) {
+  const cacheKey = `sp500_hist_v2_${startDate}_${endDate}`;
+  try {
+    const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+    if (cached?.bars?.length >= 100 && Date.now() - cached.ts < 86400000) return cached.bars;
+  } catch (_) { /* ignore */ }
+
+  const period1 = Math.floor(new Date(`${startDate}T12:00:00`).getTime() / 1000);
+  const period2 = Math.floor(new Date(`${endDate}T23:59:59`).getTime() / 1000);
+  const sym = encodeURIComponent('^GSPC');
+  const yahooUrls = [
+    `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&period1=${period1}&period2=${period2}&includePrePost=false`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=max&includePrePost=false`,
+  ];
+
+  let lastErr = 'S&P 500 歷史載入失敗';
+  for (const url of yahooUrls) {
+    try {
+      const json = await fetchYahooChartJson(url);
+      const bars = yahooChartToBars(json, startDate, endDate);
+      if (bars.length >= 100) {
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ bars, ts: Date.now(), source: 'Yahoo ^GSPC' }));
+        } catch (_) { /* 快取滿仍回傳資料 */ }
+        return bars;
+      }
+      lastErr = `Yahoo 僅 ${bars.length} 筆`;
+    } catch (e) {
+      lastErr = e.message || lastErr;
+    }
+  }
+
+  try {
+    const chunked = await fetchSp500ByYearChunks(startDate, endDate);
+    if (chunked.length >= 100) {
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({ bars: chunked, ts: Date.now(), source: 'Yahoo ^GSPC 分批' }));
+      } catch (_) {}
+      return chunked;
+    }
+    lastErr = `Yahoo 分批僅 ${chunked.length} 筆`;
+  } catch (e) {
+    lastErr = e.message || lastErr;
+  }
+
+  try {
+    const bars = await fetchFredHistorical('SP500', startDate, endDate);
+    if (bars.length >= 100) return bars;
+    lastErr = `FRED 僅 ${bars.length} 筆（SP500 日線約 2016 年起）`;
+  } catch (e) {
+    lastErr = e.message || lastErr;
+  }
+  throw new Error(lastErr);
+}
+
 // =====================================================
 // FRED（直接填 Key，經公開 CORS 代理連線，免部署）
 // =====================================================
@@ -665,32 +798,43 @@ async function fetchFredHistorical(seriesId, startDate, endDate) {
     : '';
 
   const parseObs = (json) => {
+    if (!json || json.error || json.error_message) {
+      throw new Error(json?.error || json?.error_message || 'FRED 回傳錯誤');
+    }
     const obs = (json.observations || [])
       .filter(o => o.value !== '.' && !Number.isNaN(parseFloat(o.value)))
       .map(o => ({ date: o.date, close: parseFloat(o.value) }))
       .sort((a, b) => a.date.localeCompare(b.date));
-    if (obs.length < 100) throw new Error('FRED 歷史資料不足');
+    if (obs.length < 100) throw new Error(`FRED 歷史資料不足（${obs.length} 筆，SP500 日線約 2016 年起）`);
     fredLsSet(cacheKey, { bars: obs, ts: Date.now() });
     return obs;
   };
 
+  async function fetchFredJson(url) {
+    const r = await fetchWithTimeout(url, 45000);
+    const json = await r.json();
+    if (!r.ok) throw new Error(json?.error || `FRED HTTP ${r.status}`);
+    return json;
+  }
+
   const fetchers = [];
   if (isCloudDeployed()) {
-    fetchers.push(() => fetchWithTimeout(`${cloudFn('fred')}?${q}`, 45000).then(r => r.json()));
-    if (key) fetchers.push(() => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 45000).then(r => r.json()));
+    fetchers.push(() => fetchFredJson(`${cloudFn('fred')}?${q}`).then(parseObs));
+    if (key) fetchers.push(() => fetchFredJson(`${cloudFn('fred')}?${qk}`).then(parseObs));
   }
   if (key) {
     fetchers.push(
-      () => fetchWithTimeout(proxyUrl(`/fred?${qk}`), 45000).then(r => r.json()),
-      () => fetchWithTimeout(`http://127.0.0.1:8787/fred?${qk}`, 45000).then(r => r.json()),
-      () => fetchWithTimeout(`http://localhost:8787/fred?${qk}`, 45000).then(r => r.json()),
-      () => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 45000).then(r => r.json()),
+      () => fetchFredJson(proxyUrl(`/fred?${qk}`)).then(parseObs),
+      () => fetchFredJson(`http://127.0.0.1:8787/fred?${qk}`).then(parseObs),
+      () => fetchFredJson(`http://localhost:8787/fred?${qk}`).then(parseObs),
+      () => fetchFredJson(`${cloudFn('fred')}?${qk}`).then(parseObs),
     );
     if (fredDirect) {
       fetchers.push(async () => {
         const r = await fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(fredDirect)}`, 45000);
+        if (!r.ok) throw new Error(`CORS 代理 HTTP ${r.status}`);
         const j = await r.json();
-        return typeof j.contents === 'string' ? JSON.parse(j.contents) : j;
+        return parseObs(typeof j.contents === 'string' ? JSON.parse(j.contents) : j);
       });
     }
   }
@@ -700,7 +844,7 @@ async function fetchFredHistorical(seriesId, startDate, endDate) {
   let lastErr = 'FRED 歷史資料載入失敗';
   for (const f of fetchers) {
     try {
-      return parseObs(await f());
+      return await f();
     } catch (e) {
       lastErr = e.message || lastErr;
     }

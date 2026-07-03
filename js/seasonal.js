@@ -21,7 +21,7 @@ const MARKETS = {
     id: 'sp500',
     name: 'S&P 500',
     electionMode: 'us',
-    fetch: () => fetchFredHistorical('SP500', SEASONAL_START, SEASONAL_END),
+    fetch: () => fetchSp500Historical(SEASONAL_START, SEASONAL_END),
   },
   twii: {
     id: 'twii',
@@ -197,6 +197,9 @@ function computeWeeklyStats(yearsMap, marketId) {
 function analyzeSeasonal(bars, marketId) {
   const yearsMap = groupBarsByYear(bars);
   const yearNums = Object.keys(yearsMap).map(Number).sort((a, b) => a - b);
+  if (yearNums.length < 2) {
+    throw new Error(`樣本年數不足（僅 ${yearNums.length} 年）`);
+  }
   const curves = {};
   for (const y of yearNums) curves[y] = buildYearCurve(yearsMap[y]);
 
@@ -245,6 +248,8 @@ function analyzeSeasonal(bars, marketId) {
     maxLen,
     sampleYears: yearNums.length,
     barCount: bars.length,
+    dataFrom: bars[0]?.date,
+    dataTo: bars[bars.length - 1]?.date,
   };
 }
 
@@ -254,7 +259,7 @@ function seasonalAiAdvice(market, analysis) {
   const lines = [];
   const mkt = MARKETS[market].name;
 
-  lines.push(`📊 ${mkt} · ${analysis.sampleYears} 年真實樣本（2000–2025）`);
+  lines.push(`📊 ${mkt} · ${analysis.sampleYears} 年真實樣本（${analysis.dataFrom || '—'}～${analysis.dataTo || '—'}）`);
 
   if (m && m.total) {
     const bias = m.upPct >= 55 ? '偏多' : m.upPct <= 45 ? '偏空' : '中性';
@@ -552,7 +557,10 @@ function renderSeasonalView(market) {
   }
 
   if (status) {
-    status.innerHTML = `<span class="data-badge data-live">● ${analysis.sampleYears} 年 · ${analysis.barCount?.toLocaleString() || '—'} 交易日 · ${MARKETS[market].name}</span>`;
+    const range = analysis.dataFrom && analysis.dataTo
+      ? ` · ${analysis.dataFrom}～${analysis.dataTo}`
+      : '';
+    status.innerHTML = `<span class="data-badge data-live">● ${analysis.sampleYears} 年 · ${analysis.barCount?.toLocaleString() || '—'} 交易日${range} · ${MARKETS[market].name}</span>`;
   }
   if (advice) {
     advice.innerHTML = `
@@ -592,7 +600,7 @@ async function loadSeasonalAnalysis() {
 
 function bootSeasonalPanel() {
   if (!document.getElementById('seasonalPanel')) return;
-  if (typeof fetchFredHistorical !== 'function' || typeof fetchTaiexIndexHistorical !== 'function') {
+  if (typeof fetchSp500Historical !== 'function' || typeof fetchTaiexIndexHistorical !== 'function') {
     setTimeout(bootSeasonalPanel, 200);
     return;
   }
