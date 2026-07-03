@@ -544,28 +544,67 @@ function yahooChartToBars(json, startDate, endDate) {
   return bars.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-/** 經 CORS 代理抓 Yahoo Chart（季節性長歷史用） */
+/** 經後端代理（Netlify / 本機 8787）抓 Yahoo Chart，避開 CORS 與公開代理不穩 */
+async function fetchYahooChartViaServer(queryString) {
+  const urls = [];
+  if (isCloudDeployed()) urls.push(`${cloudFn('yahoo')}?${queryString}`);
+  urls.push(
+    proxyUrl(`/yahoo?${queryString}`),
+    `http://127.0.0.1:8787/yahoo?${queryString}`,
+    `http://localhost:8787/yahoo?${queryString}`,
+  );
+
+  let lastErr = 'Yahoo 代理連線失敗（Netlify 或本機 python local-proxy.py）';
+  for (const url of urls) {
+    try {
+      const r = await fetchWithTimeout(url, 45000);
+      const json = await r.json();
+      if (!r.ok) throw new Error(json?.error || `HTTP ${r.status}`);
+      if (json?.chart?.result?.[0]) return json;
+      throw new Error(json?.error || 'Yahoo 回傳空資料');
+    } catch (e) {
+      lastErr = e.name === 'AbortError' ? 'Yahoo 代理連線逾時' : (e.message || lastErr);
+    }
+  }
+  throw new Error(lastErr);
+}
+
+function sp500YahooQuery(startDate, endDate) {
+  const period1 = Math.floor(new Date(`${startDate}T12:00:00`).getTime() / 1000);
+  const period2 = Math.floor(new Date(`${endDate}T23:59:59`).getTime() / 1000);
+  return `symbol=${encodeURIComponent('^GSPC')}&period1=${period1}&period2=${period2}`;
+}
+
+async function fetchSp500ByYearChunksServer(startDate, endDate) {
+  const y0 = parseInt(startDate.slice(0, 4), 10);
+  const y1 = parseInt(endDate.slice(0, 4), 10);
+  const merged = [];
+  for (let y = y0; y <= y1; y++) {
+    const p1 = Math.floor(new Date(`${y}-01-01T12:00:00`).getTime() / 1000);
+    const p2 = Math.floor(new Date(`${y}-12-31T23:59:59`).getTime() / 1000);
+    const q = `symbol=${encodeURIComponent('^GSPC')}&period1=${p1}&period2=${p2}`;
+    try {
+      const json = await fetchYahooChartViaServer(q);
+      merged.push(...yahooChartToBars(json, startDate, endDate));
+    } catch (_) { /* skip year */ }
+    await new Promise(r => setTimeout(r, 150));
+  }
+  const dedup = {};
+  for (const b of merged) dedup[b.date] = b;
+  return Object.values(dedup).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** 經 CORS 代理抓 Yahoo Chart（公開代理備援） */
 async function fetchYahooChartJson(targetUrl) {
   const proxies = [
     async (url) => {
-      const r = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(url)}`, 60000);
+      const r = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(url)}`, 20000);
       if (!r.ok) throw new Error('corsproxy');
       return r.json();
     },
     async (url) => {
-      const r = await fetchWithTimeout(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, 60000);
-      if (!r.ok) throw new Error('allorigins-raw');
-      return r.json();
-    },
-    async (url) => {
-      const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`);
-      if (!r.ok) throw new Error('allorigins-get');
-      const data = await r.json();
-      return JSON.parse(data.contents);
-    },
-    async (url) => {
-      const r = await fetch(url, { mode: 'cors' });
-      if (!r.ok) throw new Error('direct');
+      const r = await fetchWithTimeout(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, 20000);
+      if (!r.ok) throw new Error('allorigins');
       return r.json();
     },
   ];
@@ -576,35 +615,15 @@ async function fetchYahooChartJson(targetUrl) {
       if (json?.chart?.result?.[0]) return json;
       lastErr = 'Yahoo 回傳空資料';
     } catch (e) {
-      lastErr = e.message || lastErr;
+      lastErr = e.name === 'AbortError' ? 'Yahoo 連線逾時' : (e.message || lastErr);
     }
   }
   throw new Error(lastErr);
 }
 
-async function fetchSp500ByYearChunks(startDate, endDate) {
-  const sym = encodeURIComponent('^GSPC');
-  const merged = [];
-  const y0 = parseInt(startDate.slice(0, 4), 10);
-  const y1 = parseInt(endDate.slice(0, 4), 10);
-  for (let y = y0; y <= y1; y++) {
-    const p1 = Math.floor(new Date(`${y}-01-01T12:00:00`).getTime() / 1000);
-    const p2 = Math.floor(new Date(`${y}-12-31T23:59:59`).getTime() / 1000);
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&period1=${p1}&period2=${p2}&includePrePost=false`;
-    try {
-      const json = await fetchYahooChartJson(url);
-      merged.push(...yahooChartToBars(json, startDate, endDate));
-    } catch (_) { /* skip year */ }
-    await new Promise(r => setTimeout(r, 250));
-  }
-  const dedup = {};
-  for (const b of merged) dedup[b.date] = b;
-  return Object.values(dedup).sort((a, b) => a.date.localeCompare(b.date));
-}
-
-/** S&P 500 完整歷史（2000–2025）· Yahoo ^GSPC 為主，FRED 為輔 */
+/** S&P 500 歷史（2000–2025）· 後端 Yahoo 代理為主 */
 async function fetchSp500Historical(startDate, endDate) {
-  const cacheKey = `sp500_hist_v2_${startDate}_${endDate}`;
+  const cacheKey = `sp500_hist_v4_${startDate}_${endDate}`;
   try {
     const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
     if (cached?.bars?.length >= 100 && Date.now() - cached.ts < 86400000) return cached.bars;
@@ -613,30 +632,27 @@ async function fetchSp500Historical(startDate, endDate) {
   const period1 = Math.floor(new Date(`${startDate}T12:00:00`).getTime() / 1000);
   const period2 = Math.floor(new Date(`${endDate}T23:59:59`).getTime() / 1000);
   const sym = encodeURIComponent('^GSPC');
-  const yahooUrls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&period1=${period1}&period2=${period2}&includePrePost=false`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=max&includePrePost=false`,
-  ];
+  const yahooDirectUrl =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&period1=${period1}&period2=${period2}&includePrePost=false`;
 
   let lastErr = 'S&P 500 歷史載入失敗';
-  for (const url of yahooUrls) {
-    try {
-      const json = await fetchYahooChartJson(url);
-      const bars = yahooChartToBars(json, startDate, endDate);
-      if (bars.length >= 100) {
-        try {
-          localStorage.setItem(cacheKey, JSON.stringify({ bars, ts: Date.now(), source: 'Yahoo ^GSPC' }));
-        } catch (_) { /* 快取滿仍回傳資料 */ }
-        return bars;
-      }
-      lastErr = `Yahoo 僅 ${bars.length} 筆`;
-    } catch (e) {
-      lastErr = e.message || lastErr;
+
+  try {
+    const json = await fetchYahooChartViaServer(sp500YahooQuery(startDate, endDate));
+    const bars = yahooChartToBars(json, startDate, endDate);
+    if (bars.length >= 100) {
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({ bars, ts: Date.now(), source: 'Yahoo ^GSPC' }));
+      } catch (_) {}
+      return bars;
     }
+    lastErr = `Yahoo 僅 ${bars.length} 筆`;
+  } catch (e) {
+    lastErr = e.message || lastErr;
   }
 
   try {
-    const chunked = await fetchSp500ByYearChunks(startDate, endDate);
+    const chunked = await withTimeout(fetchSp500ByYearChunksServer(startDate, endDate), 120000, 'Yahoo S&P 分批');
     if (chunked.length >= 100) {
       try {
         localStorage.setItem(cacheKey, JSON.stringify({ bars: chunked, ts: Date.now(), source: 'Yahoo ^GSPC 分批' }));
@@ -649,9 +665,18 @@ async function fetchSp500Historical(startDate, endDate) {
   }
 
   try {
-    const bars = await fetchFredHistorical('SP500', startDate, endDate);
+    const json = await withTimeout(fetchYahooChartJson(yahooDirectUrl), 25000, 'Yahoo 公開代理');
+    const bars = yahooChartToBars(json, startDate, endDate);
     if (bars.length >= 100) return bars;
-    lastErr = `FRED 僅 ${bars.length} 筆（SP500 日線約 2016 年起）`;
+    lastErr = `公開代理僅 ${bars.length} 筆`;
+  } catch (e) {
+    lastErr = e.message || lastErr;
+  }
+
+  try {
+    const bars = await withTimeout(fetchFredHistorical('SP500', startDate, endDate), 20000, 'FRED S&P');
+    if (bars.length >= 100) return bars;
+    lastErr = `FRED 僅 ${bars.length} 筆（日線約 2016 年起）`;
   } catch (e) {
     lastErr = e.message || lastErr;
   }
@@ -704,6 +729,15 @@ async function fetchWithTimeout(url, ms = 35000) {
   } finally {
     clearTimeout(t);
   }
+}
+
+function withTimeout(promise, ms, label = '操作') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${label}逾時（${Math.round(ms / 1000)}s）`)), ms);
+    }),
+  ]);
 }
 
 async function fetchFredSeriesRaw(seriesId, limit) {
@@ -811,7 +845,7 @@ async function fetchFredHistorical(seriesId, startDate, endDate) {
   };
 
   async function fetchFredJson(url) {
-    const r = await fetchWithTimeout(url, 45000);
+    const r = await fetchWithTimeout(url, 15000);
     const json = await r.json();
     if (!r.ok) throw new Error(json?.error || `FRED HTTP ${r.status}`);
     return json;
@@ -878,14 +912,14 @@ async function fetchTaiexIndexByYear(dataset, dataId, startDate, endDate) {
       const part = await fetchFinMindIndexBars(dataset, dataId, `${y}-01-01`, `${y}-12-31`);
       merged.push(...part);
     } catch (_) { /* try next year */ }
-    await new Promise(r => setTimeout(r, 180));
+    await new Promise(r => setTimeout(r, 150));
   }
   const dedup = {};
   for (const b of merged) dedup[b.date] = b;
   return Object.values(dedup).sort((a, b) => a.date.localeCompare(b.date));
 }
 
-/** 台股加權指數歷史（FinMind 真實日資料） */
+/** 台股加權指數歷史（FinMind 真實日資料，季節性專用） */
 async function fetchTaiexIndexHistorical(startDate, endDate) {
   const cacheKey = `taiex_hist_v3_${startDate}_${endDate}`;
   try {
@@ -904,12 +938,22 @@ async function fetchTaiexIndexHistorical(startDate, endDate) {
   let lastErr = '台股加權歷史資料不足';
   for (const s of strategies) {
     try {
-      let bars = await fetchFinMindIndexBars(s.dataset, s.data_id, startDate, endDate);
+      let bars = await withTimeout(
+        fetchFinMindIndexBars(s.dataset, s.data_id, startDate, endDate),
+        45000,
+        s.label,
+      );
       if (bars.length < 100) {
-        bars = await fetchTaiexIndexByYear(s.dataset, s.data_id, startDate, endDate);
+        bars = await withTimeout(
+          fetchTaiexIndexByYear(s.dataset, s.data_id, startDate, endDate),
+          90000,
+          `${s.label}分批`,
+        );
       }
       if (bars.length >= 100) {
-        localStorage.setItem(cacheKey, JSON.stringify({ bars, ts: Date.now(), source: s.label }));
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ bars, ts: Date.now(), source: s.label }));
+        } catch (_) {}
         return bars;
       }
       lastErr = `${s.label} 僅 ${bars.length} 筆`;
@@ -2516,8 +2560,8 @@ async function loadSymbol() {
     const timeStr = market.updatedAt.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
     setDataStatus('ok', `● 真實數據 · ${market.source} · ${timeStr}`);
 
-    await loadMarketOverview();
-    await renderSentiment();
+    loadMarketOverview().catch((e) => console.warn('market overview', e));
+    renderSentiment().catch((e) => console.warn('sentiment', e));
   } catch (err) {
     console.error(err);
     showLoadError(err.message || '資料來源暫時無法連線，請稍後再試');
@@ -2832,6 +2876,7 @@ async function bootDashboard() {
   if (typeof updateMobileSettingsUI === 'function') updateMobileSettingsUI();
   if (typeof updateMobileTokenStatus === 'function') updateMobileTokenStatus();
   await loadSymbol();
+  if (typeof scheduleSeasonalLoad === 'function') scheduleSeasonalLoad();
 }
 
 bootDashboard();

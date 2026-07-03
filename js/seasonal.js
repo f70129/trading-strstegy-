@@ -1,6 +1,6 @@
 // =====================================================
 // 季節性型態 · Seasonal Pattern (2000–2025)
-// 台股加權 & S&P 500 · STA 風格
+// 台股加權 & S&P 500 · STA 風格（預設台股，S&P 按需載入）
 // =====================================================
 
 const SEASONAL_START = '2000-01-01';
@@ -12,22 +12,23 @@ const MONTH_LABELS_ZH = ['1月', '2月', '3月', '4月', '5月', '6月', '7月',
 let _seasonalChart = null;
 let _seasonalData = { twii: null, sp500: null };
 let _seasonalErrors = { twii: null, sp500: null };
-let _seasonalMarket = 'sp500';
+let _seasonalMarket = 'twii';
 let _showYearLines = true;
+let _sp500Loading = false;
 const WEEK_LABELS = ['第1週', '第2週', '第3週', '第4週'];
 
 const MARKETS = {
-  sp500: {
-    id: 'sp500',
-    name: 'S&P 500',
-    electionMode: 'us',
-    fetch: () => fetchSp500Historical(SEASONAL_START, SEASONAL_END),
-  },
   twii: {
     id: 'twii',
     name: '台股加權',
     electionMode: 'tw',
     fetch: () => fetchTaiexIndexHistorical(SEASONAL_START, SEASONAL_END),
+  },
+  sp500: {
+    id: 'sp500',
+    name: 'S&P 500',
+    electionMode: 'us',
+    fetch: () => fetchSp500Historical(SEASONAL_START, SEASONAL_END),
   },
 };
 
@@ -520,10 +521,16 @@ function renderSeasonalChart(analysis, marketId) {
 }
 
 function switchSeasonalMarket(market) {
+  if (!MARKETS[market]) return;
   _seasonalMarket = market;
   document.querySelectorAll('.seasonal-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.market === market);
   });
+  if (market === 'sp500' && !_seasonalData.sp500 && !_seasonalErrors.sp500 && !_sp500Loading) {
+    loadSeasonalMarket('sp500', MARKETS.sp500).then(() => renderSeasonalView(market));
+    renderSeasonalView(market);
+    return;
+  }
   renderSeasonalView(market);
 }
 
@@ -542,9 +549,12 @@ function renderSeasonalView(market) {
 
   if (!analysis) {
     if (status) {
+      const loadingSp = market === 'sp500' && _sp500Loading;
       status.innerHTML = err
         ? `<div class="error-panel" style="font-size:12px;">⚠️ ${MARKETS[market].name}：${err}</div>`
-        : '<div class="loading"><span class="spinner"></span>載入歷史資料…</div>';
+        : loadingSp
+          ? '<div class="loading"><span class="spinner"></span>載入 S&P 歷史資料…</div>'
+          : '<div class="loading"><span class="spinner"></span>載入歷史資料…</div>';
     }
     if (advice) advice.innerHTML = '';
     const mt = document.getElementById('seasonalMonthlyTable');
@@ -576,39 +586,43 @@ function renderSeasonalView(market) {
   renderSeasonalChart(analysis, market);
 }
 
+let _seasonalLoadScheduled = false;
+let _seasonalLoading = false;
+
+async function loadSeasonalMarket(key, cfg) {
+  if (key === 'sp500') _sp500Loading = true;
+  try {
+    const timeoutMs = key === 'twii' ? 95000 : 120000;
+    const bars = await withTimeout(cfg.fetch(), timeoutMs, MARKETS[key].name);
+    _seasonalData[key] = analyzeSeasonal(bars, key);
+    _seasonalErrors[key] = null;
+  } catch (e) {
+    console.error('seasonal', key, e);
+    _seasonalData[key] = null;
+    _seasonalErrors[key] = e.message || '載入失敗';
+  } finally {
+    if (key === 'sp500') _sp500Loading = false;
+  }
+}
+
 async function loadSeasonalAnalysis() {
+  if (_seasonalLoading) return;
   const panel = document.getElementById('seasonalPanel');
   if (!panel) return;
 
+  _seasonalLoading = true;
   const status = document.getElementById('seasonalStatus');
-  if (status) status.innerHTML = '<div class="loading"><span class="spinner"></span>載入 2000–2025 真實歷史…</div>';
+  if (status) status.innerHTML = '<div class="loading"><span class="spinner"></span>載入台股 2000–2025 真實歷史…</div>';
 
-  for (const [key, cfg] of Object.entries(MARKETS)) {
-    try {
-      const bars = await cfg.fetch();
-      _seasonalData[key] = analyzeSeasonal(bars, key);
-      _seasonalErrors[key] = null;
-    } catch (e) {
-      console.error('seasonal', key, e);
-      _seasonalData[key] = null;
-      _seasonalErrors[key] = e.message || '載入失敗';
-    }
-  }
+  await loadSeasonalMarket('twii', MARKETS.twii);
 
+  _seasonalLoading = false;
   renderSeasonalView(_seasonalMarket);
 }
 
-function bootSeasonalPanel() {
-  if (!document.getElementById('seasonalPanel')) return;
-  if (typeof fetchSp500Historical !== 'function' || typeof fetchTaiexIndexHistorical !== 'function') {
-    setTimeout(bootSeasonalPanel, 200);
-    return;
-  }
-  loadSeasonalAnalysis();
-}
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => setTimeout(bootSeasonalPanel, 300));
-} else {
-  setTimeout(bootSeasonalPanel, 300);
+/** 主看板載入完成後再抓季節性，避免與 FinMind / Yahoo 搶連線 */
+function scheduleSeasonalLoad() {
+  if (_seasonalLoadScheduled || !document.getElementById('seasonalPanel')) return;
+  _seasonalLoadScheduled = true;
+  setTimeout(loadSeasonalAnalysis, 1500);
 }
