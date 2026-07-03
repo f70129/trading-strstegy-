@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <script>
 (function(){
-  var V='22';
+  var V='23';
   if (localStorage.getItem('app_ver') === V) return;
   localStorage.setItem('app_ver', V);
   var reload = function(){ location.reload(); };
@@ -312,6 +312,7 @@ body.mobile-app {
       <div class="chart-wrap seasonal-chart"><canvas id="seasonalChart"></canvas></div>
       <div id="seasonalAiAdvice"></div>
       <div id="seasonalMonthlyTable"></div>
+      <div id="seasonalWeeklyTable"></div>
     </div>
   </div>
 
@@ -375,8 +376,8 @@ body.mobile-app {
   <button type="button" class="mob-tab" data-tab="more"><span class="icon">⚙️</span>設定</button>
 </nav>
 
-<script src="js/mobile-ui.js?v=22"></script>
-<script src="js/dashboard.js?v=22"></script>
-<script src="js/seasonal.js?v=22"></script>
+<script src="js/mobile-ui.js?v=23"></script>
+<script src="js/dashboard.js?v=23"></script>
+<script src="js/seasonal.js?v=23"></script>
 </body>
 </html>

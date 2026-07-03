@@ -11,8 +11,10 @@ const MONTH_LABELS_ZH = ['1月', '2月', '3月', '4月', '5月', '6月', '7月',
 
 let _seasonalChart = null;
 let _seasonalData = { twii: null, sp500: null };
+let _seasonalErrors = { twii: null, sp500: null };
 let _seasonalMarket = 'sp500';
 let _showYearLines = true;
+const WEEK_LABELS = ['第1週', '第2週', '第3週', '第4週'];
 
 const MARKETS = {
   sp500: {
@@ -101,12 +103,51 @@ function monthTickIndices(maxLen) {
   return ticks;
 }
 
+function weekOfMonth(day) {
+  if (day <= 7) return 1;
+  if (day <= 14) return 2;
+  if (day <= 21) return 3;
+  return 4;
+}
+
+function currentWeekOfMonth() {
+  return weekOfMonth(new Date().getDate());
+}
+
+function finalizePeriodStat(s) {
+  return {
+    ...s,
+    upPct: s.total ? (s.up / s.total) * 100 : null,
+    downPct: s.total ? (s.down / s.total) * 100 : null,
+    avgRet: s.total ? s.sumRet / s.total : null,
+    presUpPct: s.presTotal ? (s.presUp / s.presTotal) * 100 : null,
+    midUpPct: s.midTotal ? (s.midUp / s.midTotal) * 100 : null,
+  };
+}
+
+function emptyPeriodStat() {
+  return { up: 0, down: 0, total: 0, sumRet: 0, presUp: 0, presTotal: 0, midUp: 0, midTotal: 0 };
+}
+
+function recordPeriodReturn(stat, ret, et) {
+  stat.total++;
+  stat.sumRet += ret;
+  if (ret >= 0) stat.up++; else stat.down++;
+  if (et === 'presidential') {
+    stat.presTotal++;
+    if (ret >= 0) stat.presUp++;
+  }
+  if (et === 'midterm' || et === 'local') {
+    stat.midTotal++;
+    if (ret >= 0) stat.midUp++;
+  }
+}
+
 function computeMonthlyStats(yearsMap, marketId) {
   const stats = MONTH_LABELS_ZH.map((label, idx) => ({
     month: idx + 1,
     label,
-    up: 0, down: 0, total: 0, sumRet: 0,
-    presUp: 0, presTotal: 0, midUp: 0, midTotal: 0,
+    ...emptyPeriodStat(),
   }));
 
   for (const [ys, bars] of Object.entries(yearsMap)) {
@@ -116,29 +157,41 @@ function computeMonthlyStats(yearsMap, marketId) {
       const mb = bars.filter(b => parseInt(b.date.slice(5, 7), 10) === m);
       if (mb.length < 2) continue;
       const ret = (mb[mb.length - 1].close / mb[0].close - 1) * 100;
-      const s = stats[m - 1];
-      s.total++;
-      s.sumRet += ret;
-      if (ret >= 0) s.up++; else s.down++;
-      if (et === 'presidential') {
-        s.presTotal++;
-        if (ret >= 0) s.presUp++;
-      }
-      if (et === 'midterm' || et === 'local') {
-        s.midTotal++;
-        if (ret >= 0) s.midUp++;
+      recordPeriodReturn(stats[m - 1], ret, et);
+    }
+  }
+
+  return stats.map(finalizePeriodStat);
+}
+
+function computeWeeklyStats(yearsMap, marketId) {
+  const grid = MONTH_LABELS_ZH.map((label, idx) =>
+    WEEK_LABELS.map((weekLabel, wi) => ({
+      month: idx + 1,
+      week: wi + 1,
+      monthLabel: label,
+      weekLabel,
+      ...emptyPeriodStat(),
+    }))
+  );
+
+  for (const [ys, bars] of Object.entries(yearsMap)) {
+    const year = parseInt(ys, 10);
+    const et = electionTypeFor(marketId, year);
+    for (let m = 1; m <= 12; m++) {
+      for (let w = 1; w <= 4; w++) {
+        const wb = bars.filter(b => {
+          const day = parseInt(b.date.slice(8, 10), 10);
+          return parseInt(b.date.slice(5, 7), 10) === m && weekOfMonth(day) === w;
+        });
+        if (wb.length < 2) continue;
+        const ret = (wb[wb.length - 1].close / wb[0].close - 1) * 100;
+        recordPeriodReturn(grid[m - 1][w - 1], ret, et);
       }
     }
   }
 
-  return stats.map(s => ({
-    ...s,
-    upPct: s.total ? (s.up / s.total) * 100 : 0,
-    downPct: s.total ? (s.down / s.total) * 100 : 0,
-    avgRet: s.total ? s.sumRet / s.total : 0,
-    presUpPct: s.presTotal ? (s.presUp / s.presTotal) * 100 : null,
-    midUpPct: s.midTotal ? (s.midUp / s.midTotal) * 100 : null,
-  }));
+  return grid.map(row => row.map(finalizePeriodStat));
 }
 
 function analyzeSeasonal(bars, marketId) {
@@ -169,6 +222,7 @@ function analyzeSeasonal(bars, marketId) {
   const avgPres = averageCurves(presCurves);
   const avgMid = averageCurves(midCurves);
   const monthly = computeMonthlyStats(yearsMap, marketId);
+  const weekly = computeWeeklyStats(yearsMap, marketId);
 
   const maxLen = avgAll.length;
   const dayIdx = Math.min(maxLen - 1, Math.floor((cm - 1) / 12 * maxLen));
@@ -183,12 +237,14 @@ function analyzeSeasonal(bars, marketId) {
     avgPres,
     avgMid,
     monthly,
+    weekly,
     ytdPct,
     seasonalAtNow,
     currentYearType: electionTypeFor(marketId, cy),
     currentMonth: cm,
     maxLen,
     sampleYears: yearNums.length,
+    barCount: bars.length,
   };
 }
 
@@ -203,6 +259,11 @@ function seasonalAiAdvice(market, analysis) {
   if (m && m.total) {
     const bias = m.upPct >= 55 ? '偏多' : m.upPct <= 45 ? '偏空' : '中性';
     lines.push(`【${m.label}】歷史上漲 ${m.upPct.toFixed(0)}% / 跌 ${m.downPct.toFixed(0)}%（${m.total} 次樣本，月均 ${m.avgRet >= 0 ? '+' : ''}${m.avgRet.toFixed(2)}%）→ ${bias}`);
+    const cw = analysis.weekly?.[analysis.currentMonth - 1]?.[currentWeekOfMonth() - 1];
+    if (cw && cw.total) {
+      const wb = cw.upPct >= 55 ? '偏多' : cw.upPct <= 45 ? '偏空' : '中性';
+      lines.push(`【${m.label}${WEEK_LABELS[currentWeekOfMonth() - 1]}】上漲 ${cw.upPct.toFixed(0)}% / 跌 ${cw.downPct.toFixed(0)}%（${cw.total} 次）→ ${wb}`);
+    }
     if (m.presUpPct != null && et === 'presidential') {
       lines.push(`　└ 總統選舉年 ${m.label} 上漲機率 ${m.presUpPct.toFixed(0)}%（${m.presTotal} 次）`);
     }
@@ -254,12 +315,31 @@ function renderElectionLegend(marketId, yearNums) {
     </div>`;
 }
 
+function fmtPct(v, digits = 0) {
+  if (v == null || Number.isNaN(v)) return '—';
+  return v.toFixed(digits) + '%';
+}
+
+function fmtRet(v) {
+  if (v == null || Number.isNaN(v)) return '—';
+  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+}
+
 function renderMonthlyTable(monthly, marketId) {
   const el = document.getElementById('seasonalMonthlyTable');
   if (!el) return;
   const midLabel = marketId === 'twii' ? '九合一漲%' : '期中漲%';
+  const curM = new Date().getMonth() + 1;
+  const hasData = monthly.some(m => m.total > 0);
+
+  if (!hasData) {
+    el.innerHTML = `<div class="error-panel" style="font-size:12px;margin-top:10px;">⚠️ 月份勝率無資料，請確認歷史數據已載入</div>`;
+    return;
+  }
+
   el.innerHTML = `
-    <div style="overflow-x:auto;margin-top:10px;">
+    <div class="stat-label" style="margin-top:12px;margin-bottom:6px;">📅 月份勝率統計（2000–2025 真實樣本）</div>
+    <div style="overflow-x:auto;">
       <table class="fib-table seasonal-table">
         <thead>
           <tr>
@@ -269,14 +349,56 @@ function renderMonthlyTable(monthly, marketId) {
         </thead>
         <tbody>
           ${monthly.map(m => `
-          <tr class="${m.month === new Date().getMonth() + 1 ? 'seasonal-current-month' : ''}">
-            <td class="gold">${m.label}${m.month === new Date().getMonth() + 1 ? ' ◀' : ''}</td>
-            <td class="up">${m.upPct.toFixed(0)}%</td>
-            <td class="down">${m.downPct.toFixed(0)}%</td>
-            <td class="${m.avgRet >= 0 ? 'up' : 'down'}">${m.avgRet >= 0 ? '+' : ''}${m.avgRet.toFixed(2)}%</td>
-            <td>${m.presUpPct != null ? m.presUpPct.toFixed(0) + '%' : '—'}</td>
-            <td>${m.midUpPct != null ? m.midUpPct.toFixed(0) + '%' : '—'}</td>
-            <td style="color:var(--muted)">${m.total}</td>
+          <tr class="${m.month === curM ? 'seasonal-current-month' : ''}">
+            <td class="gold">${m.label}${m.month === curM ? ' ◀' : ''}</td>
+            <td class="up">${fmtPct(m.upPct)}</td>
+            <td class="down">${fmtPct(m.downPct)}</td>
+            <td class="${m.avgRet >= 0 ? 'up' : 'down'}">${fmtRet(m.avgRet)}</td>
+            <td>${fmtPct(m.presUpPct)}</td>
+            <td>${fmtPct(m.midUpPct)}</td>
+            <td style="color:var(--muted)">${m.total || '—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderWeeklyTable(weekly, marketId) {
+  const el = document.getElementById('seasonalWeeklyTable');
+  if (!el || !weekly) return;
+  const curM = new Date().getMonth() + 1;
+  const curW = currentWeekOfMonth();
+  const rows = [];
+  for (const monthRow of weekly) {
+    for (const w of monthRow) {
+      rows.push(w);
+    }
+  }
+  const hasData = rows.some(w => w.total > 0);
+
+  if (!hasData) {
+    el.innerHTML = '';
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="stat-label" style="margin-top:14px;margin-bottom:6px;">📆 每月週次勝率（第1週=1–7日 · 第2週=8–14日 · 第3週=15–21日 · 第4週=22日–月底）</div>
+    <div style="overflow-x:auto;max-height:360px;overflow-y:auto;">
+      <table class="fib-table seasonal-table">
+        <thead>
+          <tr>
+            <th>月份</th><th>週次</th><th>上漲機率</th><th>下跌機率</th><th>平均報酬</th><th>樣本</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(w => `
+          <tr class="${w.month === curM && w.week === curW ? 'seasonal-current-month' : ''}">
+            <td class="gold">${w.monthLabel}${w.month === curM ? ' ◀' : ''}</td>
+            <td>${w.weekLabel}${w.month === curM && w.week === curW ? ' ◀' : ''}</td>
+            <td class="up">${w.total ? fmtPct(w.upPct) : '—'}</td>
+            <td class="down">${w.total ? fmtPct(w.downPct) : '—'}</td>
+            <td class="${w.avgRet == null ? 'neutral' : w.avgRet >= 0 ? 'up' : 'down'}">${fmtRet(w.avgRet)}</td>
+            <td style="color:var(--muted)">${w.total || '—'}</td>
           </tr>`).join('')}
         </tbody>
       </table>
@@ -409,16 +531,28 @@ function toggleSeasonalYearLines() {
 
 function renderSeasonalView(market) {
   const analysis = _seasonalData[market];
+  const err = _seasonalErrors[market];
   const status = document.getElementById('seasonalStatus');
   const advice = document.getElementById('seasonalAiAdvice');
 
   if (!analysis) {
-    if (status) status.innerHTML = '<div class="loading"><span class="spinner"></span>載入歷史資料…</div>';
+    if (status) {
+      status.innerHTML = err
+        ? `<div class="error-panel" style="font-size:12px;">⚠️ ${MARKETS[market].name}：${err}</div>`
+        : '<div class="loading"><span class="spinner"></span>載入歷史資料…</div>';
+    }
+    if (advice) advice.innerHTML = '';
+    const mt = document.getElementById('seasonalMonthlyTable');
+    const wt = document.getElementById('seasonalWeeklyTable');
+    if (mt) mt.innerHTML = '';
+    if (wt) wt.innerHTML = '';
+    const leg = document.getElementById('seasonalElectionLegend');
+    if (leg) leg.innerHTML = '';
     return;
   }
 
   if (status) {
-    status.innerHTML = `<span class="data-badge data-live">● ${analysis.sampleYears} 年真實數據 · ${MARKETS[market].name}</span>`;
+    status.innerHTML = `<span class="data-badge data-live">● ${analysis.sampleYears} 年 · ${analysis.barCount?.toLocaleString() || '—'} 交易日 · ${MARKETS[market].name}</span>`;
   }
   if (advice) {
     advice.innerHTML = `
@@ -430,6 +564,7 @@ function renderSeasonalView(market) {
 
   renderElectionLegend(market, analysis.yearNums);
   renderMonthlyTable(analysis.monthly, market);
+  renderWeeklyTable(analysis.weekly, market);
   renderSeasonalChart(analysis, market);
 }
 
@@ -444,20 +579,28 @@ async function loadSeasonalAnalysis() {
     try {
       const bars = await cfg.fetch();
       _seasonalData[key] = analyzeSeasonal(bars, key);
+      _seasonalErrors[key] = null;
     } catch (e) {
       console.error('seasonal', key, e);
       _seasonalData[key] = null;
-      if (key === _seasonalMarket && status) {
-        status.innerHTML = `<div class="error-panel" style="font-size:12px;">⚠️ ${cfg.name} 載入失敗：${e.message}</div>`;
-      }
+      _seasonalErrors[key] = e.message || '載入失敗';
     }
   }
 
   renderSeasonalView(_seasonalMarket);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  if (document.getElementById('seasonalPanel')) {
-    setTimeout(loadSeasonalAnalysis, 500);
+function bootSeasonalPanel() {
+  if (!document.getElementById('seasonalPanel')) return;
+  if (typeof fetchFredHistorical !== 'function' || typeof fetchTaiexIndexHistorical !== 'function') {
+    setTimeout(bootSeasonalPanel, 200);
+    return;
   }
-});
+  loadSeasonalAnalysis();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => setTimeout(bootSeasonalPanel, 300));
+} else {
+  setTimeout(bootSeasonalPanel, 300);
+}

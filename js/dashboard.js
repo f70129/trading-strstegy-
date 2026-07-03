@@ -655,34 +655,52 @@ async function fetchFredSeries(seriesId, limit = 120) {
 async function fetchFredHistorical(seriesId, startDate, endDate) {
   const cacheKey = `hist_${seriesId}_${startDate}_${endDate}`;
   const ls = fredLsGet()[cacheKey];
-  if (ls && Date.now() - ls.ts < 86400000) return ls.bars;
+  if (ls && ls.bars && Date.now() - ls.ts < 86400000) return ls.bars;
 
   const key = getFredKey();
   const q = `series_id=${encodeURIComponent(seriesId)}&observation_start=${startDate}&observation_end=${endDate}`;
   const qk = key ? `${q}&key=${encodeURIComponent(key)}` : q;
+  const fredDirect = key
+    ? `https://api.stlouisfed.org/fred/series/observations?series_id=${encodeURIComponent(seriesId)}&api_key=${encodeURIComponent(key)}&file_type=json&observation_start=${startDate}&observation_end=${endDate}&sort_order=asc`
+    : '';
 
-  const fetchers = isCloudDeployed()
-    ? [() => fetchWithTimeout(`${cloudFn('fred')}?${q}`, 45000).then(r => r.json())]
-    : key
-      ? [
-          () => fetchWithTimeout(proxyUrl(`/fred?${qk}`), 45000).then(r => r.json()),
-          () => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 45000).then(r => r.json()),
-        ]
-      : [];
+  const parseObs = (json) => {
+    const obs = (json.observations || [])
+      .filter(o => o.value !== '.' && !Number.isNaN(parseFloat(o.value)))
+      .map(o => ({ date: o.date, close: parseFloat(o.value) }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (obs.length < 100) throw new Error('FRED 歷史資料不足');
+    fredLsSet(cacheKey, { bars: obs, ts: Date.now() });
+    return obs;
+  };
 
-  if (!fetchers.length) throw new Error('需 FRED API Key');
+  const fetchers = [];
+  if (isCloudDeployed()) {
+    fetchers.push(() => fetchWithTimeout(`${cloudFn('fred')}?${q}`, 45000).then(r => r.json()));
+    if (key) fetchers.push(() => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 45000).then(r => r.json()));
+  }
+  if (key) {
+    fetchers.push(
+      () => fetchWithTimeout(proxyUrl(`/fred?${qk}`), 45000).then(r => r.json()),
+      () => fetchWithTimeout(`http://127.0.0.1:8787/fred?${qk}`, 45000).then(r => r.json()),
+      () => fetchWithTimeout(`http://localhost:8787/fred?${qk}`, 45000).then(r => r.json()),
+      () => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 45000).then(r => r.json()),
+    );
+    if (fredDirect) {
+      fetchers.push(async () => {
+        const r = await fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(fredDirect)}`, 45000);
+        const j = await r.json();
+        return typeof j.contents === 'string' ? JSON.parse(j.contents) : j;
+      });
+    }
+  }
+
+  if (!fetchers.length) throw new Error('需 FRED API Key（設定面板或 Netlify FRED_API_KEY）');
 
   let lastErr = 'FRED 歷史資料載入失敗';
   for (const f of fetchers) {
     try {
-      const json = await f();
-      const obs = (json.observations || [])
-        .filter(o => o.value !== '.' && !Number.isNaN(parseFloat(o.value)))
-        .map(o => ({ date: o.date, close: parseFloat(o.value) }))
-        .sort((a, b) => a.date.localeCompare(b.date));
-      if (obs.length < 100) throw new Error('資料不足');
-      fredLsSet(cacheKey, { bars: obs, ts: Date.now() });
-      return obs;
+      return parseObs(await f());
     } catch (e) {
       lastErr = e.message || lastErr;
     }
@@ -690,64 +708,72 @@ async function fetchFredHistorical(seriesId, startDate, endDate) {
   throw new Error(lastErr);
 }
 
-/** 台股加權指數歷史（FinMind TaiwanStockPriceIndex） */
+function finMindRowToBar(r) {
+  const date = String(r.date).slice(0, 10);
+  const close = parseFloat(r.close ?? r.price ?? r.TAIEX ?? r.closing_index);
+  if (!date || !Number.isFinite(close) || close <= 0) return null;
+  return { date, close };
+}
+
+async function fetchFinMindIndexBars(dataset, dataId, startDate, endDate) {
+  const rows = await fetchFinMind({
+    dataset,
+    data_id: dataId,
+    start_date: startDate,
+    end_date: endDate,
+  });
+  return (rows || []).map(finMindRowToBar).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+async function fetchTaiexIndexByYear(dataset, dataId, startDate, endDate) {
+  const merged = [];
+  const y0 = parseInt(startDate.slice(0, 4), 10);
+  const y1 = parseInt(endDate.slice(0, 4), 10);
+  for (let y = y0; y <= y1; y++) {
+    try {
+      const part = await fetchFinMindIndexBars(dataset, dataId, `${y}-01-01`, `${y}-12-31`);
+      merged.push(...part);
+    } catch (_) { /* try next year */ }
+    await new Promise(r => setTimeout(r, 180));
+  }
+  const dedup = {};
+  for (const b of merged) dedup[b.date] = b;
+  return Object.values(dedup).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** 台股加權指數歷史（FinMind 真實日資料） */
 async function fetchTaiexIndexHistorical(startDate, endDate) {
-  const cacheKey = `taiex_hist_${startDate}_${endDate}`;
+  const cacheKey = `taiex_hist_v3_${startDate}_${endDate}`;
   try {
     const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
-    if (cached && Date.now() - cached.ts < 86400000) return cached.bars;
+    if (cached && cached.bars && cached.bars.length >= 100 && Date.now() - cached.ts < 86400000) {
+      return cached.bars;
+    }
   } catch (_) { /* ignore */ }
 
-  let rows = [];
-  try {
-    rows = await fetchFinMind({
-      dataset: 'TaiwanStockPriceIndex',
-      data_id: 'TAIEX',
-      start_date: startDate,
-      end_date: endDate,
-    });
-  } catch (_) {
-    rows = await fetchFinMind({
-      dataset: 'TaiwanStockPriceIndex',
-      data_id: 'TSE',
-      start_date: startDate,
-      end_date: endDate,
-    });
-  }
+  const strategies = [
+    { dataset: 'TaiwanStockPrice', data_id: '001', label: '加權指數001' },
+    { dataset: 'TaiwanStockTotalReturnIndex', data_id: 'TAIEX', label: 'TAIEX報酬指數' },
+    { dataset: 'TaiwanStockPrice', data_id: 'TAIEX', label: 'TAIEX' },
+  ];
 
-  const bars = (rows || [])
-    .map(r => ({
-      date: String(r.date).slice(0, 10),
-      close: parseFloat(r.close ?? r.TAIEX ?? r.value),
-    }))
-    .filter(r => r.date && Number.isFinite(r.close) && r.close > 0)
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  if (bars.length < 100) {
-    const chunked = [];
-    for (let y = parseInt(startDate.slice(0, 4), 10); y <= parseInt(endDate.slice(0, 4), 10); y++) {
-      const part = await fetchFinMind({
-        dataset: 'TaiwanStockPriceIndex',
-        data_id: 'TAIEX',
-        start_date: `${y}-01-01`,
-        end_date: `${y}-12-31`,
-      }).catch(() => []);
-      for (const r of part || []) {
-        chunked.push({
-          date: String(r.date).slice(0, 10),
-          close: parseFloat(r.close ?? r.TAIEX),
-        });
+  let lastErr = '台股加權歷史資料不足';
+  for (const s of strategies) {
+    try {
+      let bars = await fetchFinMindIndexBars(s.dataset, s.data_id, startDate, endDate);
+      if (bars.length < 100) {
+        bars = await fetchTaiexIndexByYear(s.dataset, s.data_id, startDate, endDate);
       }
-      await new Promise(res => setTimeout(res, 200));
+      if (bars.length >= 100) {
+        localStorage.setItem(cacheKey, JSON.stringify({ bars, ts: Date.now(), source: s.label }));
+        return bars;
+      }
+      lastErr = `${s.label} 僅 ${bars.length} 筆`;
+    } catch (e) {
+      lastErr = e.message || lastErr;
     }
-    const merged = chunked.filter(r => r.date && Number.isFinite(r.close)).sort((a, b) => a.date.localeCompare(b.date));
-    if (merged.length < 100) throw new Error('台股加權歷史資料不足');
-    localStorage.setItem(cacheKey, JSON.stringify({ bars: merged, ts: Date.now() }));
-    return merged;
   }
-
-  localStorage.setItem(cacheKey, JSON.stringify({ bars, ts: Date.now() }));
-  return bars;
+  throw new Error(lastErr + '（請確認 FinMind Token）');
 }
 
 function toggleFredSettings() {
