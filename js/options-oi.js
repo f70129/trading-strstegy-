@@ -257,12 +257,37 @@ function buildOiSrRows(calls, puts, spot, highlights) {
 }
 
 async function fetchTxOptionDaily(startDate, endDate) {
-  return fetchFinMind({
-    dataset: 'TaiwanOptionDaily',
-    data_id: OI_OPTION_ID,
-    start_date: startDate,
-    end_date: endDate,
-  });
+  const dates = [];
+  const d0 = new Date(`${startDate}T12:00:00`);
+  const d1 = new Date(`${endDate}T12:00:00`);
+  for (let d = new Date(d0); d <= d1; d.setDate(d.getDate() + 1)) {
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) dates.push(d.toISOString().slice(0, 10));
+  }
+  const useDates = dates.length ? dates.slice(-6) : recentOiDates(6);
+  const parts = await Promise.allSettled(
+    useDates.map(date => fetchFinMind({
+      dataset: 'TaiwanOptionDaily',
+      data_id: OI_OPTION_ID,
+      start_date: date,
+      end_date: date,
+    })),
+  );
+  const merged = [];
+  for (const p of parts) {
+    if (p.status === 'fulfilled' && Array.isArray(p.value)) merged.push(...p.value);
+  }
+  return merged;
+}
+
+function recentOiDates(count = 6) {
+  const out = [];
+  const d = new Date();
+  while (out.length < count) {
+    if (d.getDay() !== 0 && d.getDay() !== 6) out.push(d.toISOString().slice(0, 10));
+    d.setDate(d.getDate() - 1);
+  }
+  return out.reverse();
 }
 
 async function getSpotForOi() {
@@ -277,7 +302,7 @@ async function getSpotForOi() {
 async function analyzeTxOptionOi() {
   const end = new Date();
   const start = new Date(end);
-  start.setDate(start.getDate() - 14);
+  start.setDate(start.getDate() - 8);
   const startDate = start.toISOString().slice(0, 10);
   const endDate = end.toISOString().slice(0, 10);
 
@@ -456,7 +481,12 @@ function renderOptionsOiPanel(data) {
 function renderOptionsOiError(msg) {
   const el = document.getElementById('optionsOiPanel');
   if (!el) return;
-  el.innerHTML = `<div class="error-panel" style="font-size:12px;">⚠️ ${msg}</div>`;
+  el.innerHTML = `<div class="error-panel" style="font-size:12px;">
+    ⚠️ ${msg}
+    <div style="margin-top:10px;">
+      <button class="btn btn-sm btn-outline" type="button" onclick="_oiLoading=false;loadOptionsOiPanel(true)">重新載入</button>
+    </div>
+  </div>`;
 }
 
 function renderOptionsOiLoading() {
@@ -467,7 +497,8 @@ function renderOptionsOiLoading() {
 
 async function loadOptionsOiPanel(force = false) {
   const host = document.getElementById('optionsOiPanel');
-  if (!host || _oiLoading) return;
+  if (!host) return;
+  if (_oiLoading && !force) return;
 
   if (!force) {
     try {
@@ -482,7 +513,10 @@ async function loadOptionsOiPanel(force = false) {
   _oiLoading = true;
   renderOptionsOiLoading();
   try {
-    const data = await analyzeTxOptionOi();
+    const data = await Promise.race([
+      analyzeTxOptionOi(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('台指選 OI 載入逾時（資料量大，請再試一次）')), 90000)),
+    ]);
     try {
       localStorage.setItem(OI_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
     } catch (_) { /* ignore */ }

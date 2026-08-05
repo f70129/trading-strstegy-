@@ -14,7 +14,12 @@ function initMobileTabs() {
     window.scrollTo(0, 0);
   }
 
-  tabs.forEach(t => t.addEventListener('click', () => show(t.dataset.tab)));
+  tabs.forEach(t => t.addEventListener('click', () => {
+    show(t.dataset.tab);
+    if (t.dataset.tab === 'market' && typeof loadOptionsOiPanel === 'function') {
+      loadOptionsOiPanel(false);
+    }
+  }));
   show('quote');
 }
 

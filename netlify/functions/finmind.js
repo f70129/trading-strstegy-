@@ -44,13 +44,6 @@ exports.handler = async (event) => {
     }, cors);
   }
 
-  if (!token) {
-    return respond(400, {
-      error: 'FinMind Token 未設定（Netlify 環境變數 FINMIND_TOKEN，或手機設定填入）',
-      code: 'TOKEN_MISSING',
-    }, cors);
-  }
-
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (k !== 'token') qs.set(k, v);
@@ -58,26 +51,45 @@ exports.handler = async (event) => {
 
   const url = `https://api.finmindtrade.com/api/v4/data?${qs.toString()}`;
   try {
-    const r = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Accept': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    const data = await r.json();
-    if (!r.ok || data.status === 400 || /illegal/i.test(data.msg || '')) {
+    let useToken = queryToken || envToken;
+    let data = await callFinMind(url, useToken);
+    if (
+      useToken
+      && !queryToken
+      && envToken
+      && (data.status === 400 || /illegal/i.test(data.msg || data.error || ''))
+    ) {
+      data = await callFinMind(url, '');
+    }
+    if (data.status === 400 || /illegal/i.test(data.msg || data.error || '')) {
       return respond(400, {
         ...data,
         error: data.msg || data.error || 'FinMind 回傳錯誤',
         code: /illegal/i.test(data.msg || '') ? 'TOKEN_ILLEGAL' : 'FINMIND_ERROR',
       }, cors);
     }
-    return respond(200, data, cors);
+    if (!data.error && (data.status === 200 || Array.isArray(data.data))) {
+      return respond(200, data, cors);
+    }
+    return respond(400, {
+      ...data,
+      error: data.msg || data.error || 'FinMind 回傳錯誤',
+      code: 'FINMIND_ERROR',
+    }, cors);
   } catch (e) {
     return respond(502, { error: e.message || 'FinMind 連線失敗' }, cors);
   }
 };
+
+async function callFinMind(url, token) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0',
+    Accept: 'application/json',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const r = await fetch(url, { headers });
+  return r.json();
+}
 
 function respond(status, body, cors) {
   return {
