@@ -1,0 +1,9 @@
+# Cloudflare Pages 用，Netlify 不需打包
+functions/
+
+# 本機開發用
+local-proxy.py
+*.bat
+workers/
+*.zip
+GITHUB.md

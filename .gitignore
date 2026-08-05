@@ -1,0 +1,30 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets（切勿上傳）
+.env
+.env.*
+*.pem
+credentials.json
+
+# Python 本機代理
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 編輯器
+.vscode/
+.idea/
+*.swp
+
+# 打包產物
+*.zip
+*.7z
+dist/
+_patch_*.py
+
+# 日誌
+*.log

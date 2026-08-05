@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<script>
+(function(){
+  var V='37';
+  if (localStorage.getItem('app_ver') === V) return;
+  localStorage.setItem('app_ver', V);
+  var reload = function(){ location.reload(); };
+  var jobs = [];
+  if ('serviceWorker' in navigator) {
+    jobs.push(navigator.serviceWorker.getRegistrations().then(function(rs){
+      return Promise.all(rs.map(function(r){ return r.unregister(); }));
+    }));
+  }
+  if (window.caches) {
+    jobs.push(caches.keys().then(function(ks){
+      return Promise.all(ks.map(function(k){ return caches.delete(k); }));
+    }));
+  }
+  (jobs.length ? Promise.all(jobs) : Promise.resolve()).then(reload).catch(reload);
+})();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0e1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="台指看板">
+<link rel="manifest" href="manifest-mobile.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>台指看板 · 手機版</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #0a0e1a; --panel: #111827; --border: #1f2d40;
+  --accent: #00d4ff; --green: #00ff88; --red: #ff4466;
+  --gold: #ffd700; --text: #e2e8f0; --muted: #6b7280;
+  --nav-h: 56px; --hdr-h: 52px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body.mobile-app {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px; padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom));
+}
+.mob-header {
+  position: sticky; top: 0; z-index: 200;
+  background: linear-gradient(135deg, #0a0e1a, #1a1f35);
+  border-bottom: 1px solid var(--accent);
+  padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top));
+}
+.mob-header h1 { font-size: 15px; color: var(--accent); margin-bottom: 6px; }
+.mob-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.symbol-input {
+  flex: 1; min-width: 80px; background: #1a2035; border: 1px solid var(--accent);
+  color: var(--accent); padding: 10px 12px; border-radius: 8px; font-size: 16px;
+  text-transform: uppercase;
+}
+.btn {
+  background: var(--accent); color: #000; border: none; padding: 10px 14px;
+  border-radius: 8px; font-weight: 600; font-size: 13px; min-height: 44px;
+}
+.btn-outline { background: transparent; border: 1px solid var(--muted); color: var(--muted); }
+.btn-sm { padding: 8px 10px; min-height: 40px; font-size: 12px; }
+.badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.data-badge { font-size: 10px; padding: 3px 8px; border-radius: 12px; white-space: nowrap; }
+.data-live { background: rgba(0,255,136,.15); color: var(--green); border: 1px solid var(--green); }
+.data-error { background: rgba(255,68,102,.15); color: var(--red); border: 1px solid var(--red); }
+.data-loading { background: rgba(0,212,255,.1); color: var(--accent); border: 1px solid var(--accent); }
+
+.mob-main { padding: 10px 12px; }
+.mob-panel { display: none; }
+.mob-panel.active { display: block; }
+.panel {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px; margin-bottom: 10px;
+}
+.panel-title {
+  font-size: 11px; color: var(--accent); letter-spacing: 1px;
+  margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 6px;
+}
+.panel-title .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.stat-card { background: #0d1526; border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+.stat-label { color: var(--muted); font-size: 10px; margin-bottom: 4px; }
+.stat-value { font-size: 22px; font-weight: bold; }
+.stat-sub { font-size: 11px; margin-top: 4px; }
+.up { color: var(--green); } .down { color: var(--red); } .neutral { color: var(--accent); } .gold { color: var(--gold); }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.grid-4 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.trend-badge { display: inline-flex; padding: 4px 10px; border-radius: 16px; font-size: 11px; font-weight: 600; }
+.bull { background: rgba(0,255,136,.15); border: 1px solid var(--green); color: var(--green); }
+.bear { background: rgba(255,68,102,.15); border: 1px solid var(--red); color: var(--red); }
+.sideways { background: rgba(255,213,0,.15); border: 1px solid var(--gold); color: var(--gold); }
+.chart-wrap { position: relative; height: 180px; }
+.loading { color: var(--muted); text-align: center; padding: 20px; font-size: 12px; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--muted); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; margin-right: 6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.search-input { width: 100%; background: #1a2035; border: 1px solid var(--border); color: var(--text); padding: 12px; border-radius: 8px; font-size: 16px; margin-bottom: 8px; }
+.search-results { max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; display: none; }
+.search-item { padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.search-item:active { background: #1a2035; }
+.input-field { width: 100%; background: #1a2035; border: 1px solid var(--border); color: var(--text); padding: 12px; border-radius: 8px; font-size: 14px; margin-bottom: 8px; }
+.input-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: block; }
+.hint { font-size: 11px; color: var(--muted); line-height: 1.6; margin-bottom: 10px; }
+
+.mob-nav {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 300;
+  height: calc(var(--nav-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: #0d1526; border-top: 1px solid var(--accent);
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  box-shadow: 0 -4px 24px rgba(0,0,0,.45);
+}
+.mob-tab {
+  background: none; border: none; color: var(--muted);
+  padding: 6px 2px; cursor: pointer; min-height: 48px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  touch-action: manipulation;
+}
+.mob-tab.active { color: var(--accent); font-weight: 600; }
+.input-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.kelly-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.kelly-result { background: #0d1526; border: 1px solid var(--gold); border-radius: 8px; padding: 12px; text-align: center; margin-top: 8px; }
+.kelly-pct { font-size: 28px; font-weight: bold; color: var(--gold); }
+.kelly-detail { color: var(--muted); font-size: 11px; margin-top: 4px; }
+.steps-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.step-item { background: #0d1526; border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; gap: 10px; align-items: flex-start; }
+.step-num { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #000; font-size: 11px; font-weight: bold; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.step-num.done { background: var(--green); }
+.step-num.warn { background: #ff9500; }
+.step-title { font-size: 11px; color: var(--accent); margin-bottom: 5px; }
+.step-input { background: #0a0e1a; border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 6px; font-size: 14px; width: 100%; }
+.step-display { font-size: 13px; font-weight: bold; margin-top: 4px; min-height: 20px; }
+.journal-area { background: #0d1526; border: 1px solid var(--border); border-radius: 8px; width: 100%; min-height: 80px; color: var(--text); padding: 10px; font-size: 14px; margin-bottom: 8px; }
+.log-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.log-table th { background: #0d1526; color: var(--muted); padding: 6px 4px; text-align: left; border-bottom: 1px solid var(--border); }
+.log-table td { padding: 6px 4px; border-bottom: 1px solid #1a2035; }
+.fib-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.fib-table th, .fib-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.wave-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+.wave-card { background: #0d1526; border-radius: 6px; padding: 8px; text-align: center; border: 1px solid var(--border); }
+.btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.btn-gold { background: var(--gold); color: #000; }
+.btn-green { background: var(--green); color: #000; }
+.mob-tab { font-size: 10px; }
+.mob-tab span.icon { font-size: 18px; line-height: 1; }
+.signal-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.signal-pill { padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: bold; }
+.error-panel { background: rgba(255,68,102,.08); border: 1px solid var(--red); border-radius: 8px; padding: 16px; text-align: center; }
+.progress-wrap { background: #0d1526; border-radius: 4px; height: 6px; overflow: hidden; margin-top: 6px; }
+.progress-bar { height: 100%; border-radius: 4px; transition: width .5s; }
+.search-meta { font-size: 10px; color: var(--muted); margin-top: 6px; }
+.seasonal-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.seasonal-tab {
+  flex: 1; background: #0d1526; border: 1px solid var(--border); color: var(--muted);
+  padding: 10px 6px; border-radius: 8px; font-size: 12px; min-height: 44px;
+}
+.seasonal-tab.active { border-color: var(--accent); color: var(--accent); }
+.seasonal-chart { height: 260px; margin: 8px 0; }
+.seasonal-legend { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.seasonal-table tr.seasonal-current-month td { background: rgba(0,212,255,.08); }
+</style>
+</head>
+<body class="mobile-app">
+
+<header class="mob-header">
+  <h1>📱 台指看板 · 手機版</h1>
+  <div class="mob-row">
+    <input class="symbol-input" id="symbolInput" placeholder="2330 / ^TWII / TX" value="^TWII">
+    <button class="btn btn-sm" type="button" onclick="quickSymbol('^TWII')">加權</button>
+    <button class="btn btn-sm" type="button" onclick="quickSymbol('TX')">台指</button>
+    <button class="btn btn-sm" onclick="loadSymbol()">載入</button>
+  </div>
+  <div class="badges">
+    <span id="proxyStatus" class="data-badge data-loading">● 代理…</span>
+    <span id="dataStatus" class="data-badge data-loading">● 載入中</span>
+    <span id="tokenStatus" class="data-badge data-loading">● Token…</span>
+    <span id="clockDisplay" class="data-badge" style="border:1px solid var(--border);color:var(--muted);"></span>
+  </div>
+</header>
+
+<main class="mob-main">
+
+  <!-- 標的 -->
+  <div id="tab-quote" class="mob-panel active">
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>目標標的 · <span id="targetSymbolTitle" style="color:var(--gold)">-</span></div>
+      <div id="targetInfo"><div class="loading"><span class="spinner"></span>請載入標的</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>趨勢判斷</div>
+      <div id="trendSystem"><div class="loading">等待數據</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>價格走勢</div>
+      <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- 分析：波浪 / 費波 / 量價 / 凱利 -->
+  <div id="tab-analysis" class="mob-panel">
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>艾略特波浪理論</div>
+      <div id="elliottWave"><div class="loading">等待數據</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>費波那契關鍵位</div>
+      <div id="fibLevels"><div class="loading">等待數據</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>赫斯特週期預測</div>
+      <div id="hurstCycles"><div class="loading">等待數據</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>融資餘額追蹤</div>
+      <div id="marginPanel"><div class="loading">等待數據</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>量價關係 · 當日與 5 日</div>
+      <div id="volumeAnalysis"><div class="loading">等待數據</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>凱利公式 · 倉位控管</div>
+      <div class="kelly-inputs">
+        <div class="input-group">
+          <label class="input-label">總資金 (TWD)</label>
+          <input class="input-field" id="totalCapital" type="number" value="1000000" onchange="calcKelly()">
+        </div>
+        <div class="input-group">
+          <label class="input-label">勝率 W (%)</label>
+          <input class="input-field" id="winRate" type="number" value="55" min="1" max="99" onchange="calcKelly()">
+        </div>
+        <div class="input-group">
+          <label class="input-label">獲利比 R</label>
+          <input class="input-field" id="profitRatio" type="number" value="2.0" step="0.1" onchange="calcKelly()">
+        </div>
+        <div class="input-group">
+          <label class="input-label">最大風險 (%)</label>
+          <input class="input-field" id="maxRisk" type="number" value="2" step="0.5" onchange="calcKelly()">
+        </div>
+      </div>
+      <div class="kelly-result">
+        <div class="kelly-pct" id="kellyPct">-</div>
+        <div class="kelly-detail" id="kellyDetail">請輸入參數</div>
+      </div>
+      <div id="kellyBreakdown" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <!-- 交易：十步驟 / 筆記 / 紀錄 -->
+  <div id="tab-trade" class="mob-panel">
+    <div class="panel">
+      <div class="panel-title">
+        <div class="dot"></div>10 步驟交易 · <span id="symbolBadge" style="color:var(--gold);font-size:10px;">-</span>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-sm btn-gold" type="button" onclick="calcAllSteps()">自動計算</button>
+        <button class="btn btn-sm btn-green" type="button" onclick="saveTrade()">儲存交易</button>
+        <button class="btn btn-sm btn-outline" type="button" onclick="clearSteps()">清除</button>
+      </div>
+      <div class="steps-grid" id="stepsGrid"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>交易筆記</div>
+      <textarea class="journal-area" id="tradeNote" placeholder="進場理由、市場環境…"></textarea>
+      <textarea class="journal-area" id="postNote" placeholder="復盤：結果、心得…"></textarea>
+    </div>
+    <div class="panel">
+      <div class="panel-title">
+        <div class="dot"></div>交易紀錄
+        <button class="btn btn-sm btn-outline" type="button" style="margin-left:auto;" onclick="clearLog()">清除</button>
+      </div>
+      <div style="overflow-x:auto;max-height:240px;overflow-y:auto;">
+        <table class="log-table">
+          <thead>
+            <tr><th>日期</th><th>代號</th><th>方向</th><th>進場</th><th>止損</th><th>止盈</th><th>倉位</th><th>P&L</th><th>狀態</th></tr>
+          </thead>
+          <tbody id="tradeLogBody"><tr><td colspan="9" style="text-align:center;color:var(--muted);padding:16px;">尚無紀錄</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 概況 -->
+  <div id="tab-market" class="mob-panel">
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>全球市場概況</div>
+      <div class="grid-2" id="marketOverview"><div class="loading"><span class="spinner"></span>載入中</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">
+        <div class="dot"></div>台指選 OI · 支撐壓力
+        <button class="btn btn-sm btn-outline" type="button" style="margin-left:auto;" onclick="loadOptionsOiPanel(true)">更新</button>
+      </div>
+      <div id="optionsOiPanel"><div class="loading"><span class="spinner"></span>載入中</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">
+        <div class="dot"></div>市場情緒
+        <button class="btn btn-sm btn-outline" type="button" style="margin-left:auto;" onclick="toggleBbEdit()">更新數值</button>
+      </div>
+      <div id="bbEdit" style="display:none;margin-bottom:10px;background:#0d1526;border:1px solid var(--gold);border-radius:8px;padding:10px;">
+        <div class="hint" style="margin-bottom:8px;">美銀牛熊指標每週公布（0=極空買訊、10=極多賣訊），無免費 API，請手動輸入。</div>
+        <div class="input-label">牛熊值 (0–10)</div>
+        <input class="input-field" id="bbValueInput" type="number" min="0" max="10" step="0.1" placeholder="例 5.4">
+        <button class="btn btn-sm btn-gold" type="button" style="margin-top:6px;" onclick="saveBbValue()">儲存</button>
+      </div>
+      <div id="sentimentGrid"><div class="loading">載入中</div></div>
+    </div>
+    <div class="panel" id="seasonalPanel">
+      <div class="panel-title">
+        <div class="dot"></div>季節性型態 · 2000–2025
+        <button class="btn btn-sm btn-outline" type="button" id="seasonalToggleYears" style="margin-left:auto;" onclick="toggleSeasonalYearLines()">隱藏年份線</button>
+      </div>
+      <div class="seasonal-tabs">
+        <button type="button" class="seasonal-tab active" data-market="twii" onclick="switchSeasonalMarket('twii')">🇹🇼 台股</button>
+        <button type="button" class="seasonal-tab" data-market="sp500" onclick="switchSeasonalMarket('sp500')">🇺🇸 S&amp;P</button>
+      </div>
+      <div id="seasonalStatus" class="hint"><span class="spinner"></span>載入中…</div>
+      <div id="seasonalElectionLegend"></div>
+      <div class="chart-wrap seasonal-chart"><canvas id="seasonalChart"></canvas></div>
+      <div id="seasonalAiAdvice"></div>
+      <div id="seasonalMonthlyTable"></div>
+      <div id="seasonalWeeklyTable"></div>
+    </div>
+  </div>
+
+  <!-- 量價（保留 id 供舊連結，已併入分析分頁） -->
+  <div id="tab-volume" class="mob-panel" style="display:none!important"></div>
+
+  <!-- 設定 / 搜尋 -->
+  <div id="tab-more" class="mob-panel">
+    <div class="panel search-wrap">
+      <div class="panel-title"><div class="dot"></div>台股搜尋</div>
+      <input class="search-input" id="stockSearchInput" type="search" autocomplete="off" placeholder="代號或名稱，例 2330">
+      <div id="stockSearchResults" class="search-results"></div>
+      <div id="stockSearchMeta" class="hint">載入清單中…</div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="dot"></div>連線設定</div>
+      <div id="cloudHint" class="hint" style="display:none;color:var(--green);">
+        ✓ 已使用雲端代理，免填 IP、4G/WiFi 皆可，電腦不必開著。
+      </div>
+      <div id="cloudSecretHint" class="hint" style="display:none;color:var(--green);">
+        ✓ Netlify 已內建 FinMind + FRED，手機<strong>免填 Token</strong>，開啟即用。
+      </div>
+      <div id="proxyHostBlock">
+        <label class="input-label">代理位址（僅本機 WiFi 模式）</label>
+        <input class="input-field" id="proxyHostInput" placeholder="例 192.168.1.100:8787">
+        <div class="hint">本機模式才需填。建議改部署 Netlify，手機直接用網址，免此步驟。</div>
+      </div>
+      <div id="pwaTokenHint" class="hint" style="display:none;color:var(--gold);border:1px solid var(--gold);padding:8px;border-radius:8px;margin-bottom:10px;">
+        ⚠️ 您從<strong>主畫面圖示</strong>開啟。Safari 用連結存的 Token <strong>不會帶進來</strong>，請在此頁填入 Token 並按「儲存」，或改用 Netlify 環境變數（免填）。
+      </div>
+      <div id="tokenSettingsBlock">
+      <label class="input-label">FinMind Token（選填，Netlify 已設定則免填）</label>
+      <input class="input-field" id="finmindTokenInput" placeholder="finmindtrade.com 免費 token" autocomplete="off">
+      <label class="input-label">FRED API Key（選填）</label>
+      <input class="input-field" id="fredKeyInput" placeholder="美股 S&P / VIX" autocomplete="off">
+      <button class="btn" type="button" style="width:100%;margin-top:8px;" onclick="saveMobileSettings()">儲存並重新載入</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="hint">
+        <strong>📱 最便利用法（推薦）</strong><br>
+        部署 Netlify 一次 → 在 Netlify 後台設定 Token（見下方說明）→ 手機開網址即用，<strong>不必每支手機填 Token</strong>。<br><br>
+        <strong>iPhone</strong>：Safari 開啟 → 分享 → 加入主畫面<br>
+        <strong>Android</strong>：Chrome 開啟 → ⋮ → 加入主畫面 / 安裝應用程式<br><br>
+        首次：若 Netlify 已設環境變數則免設定；否則設定分頁填入 Token<br>
+        <a href="index.html" style="color:var(--accent);">→ 電腦完整版</a>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- 隱藏節點（共用 JS） -->
+<div id="fredSettings" style="display:none"></div>
+
+<nav class="mob-nav">
+  <button type="button" class="mob-tab active" data-tab="quote"><span class="icon">📊</span>標的</button>
+  <button type="button" class="mob-tab" data-tab="analysis"><span class="icon">🌊</span>分析</button>
+  <button type="button" class="mob-tab" data-tab="trade"><span class="icon">📋</span>交易</button>
+  <button type="button" class="mob-tab" data-tab="market"><span class="icon">🌐</span>概況</button>
+  <button type="button" class="mob-tab" data-tab="more"><span class="icon">⚙️</span>設定</button>
+</nav>
+
+<script src="js/mobile-ui.js?v=37"></script>
+<script src="js/dashboard.js?v=37"></script>
+<script src="js/seasonal.js?v=37"></script>
+<script src="js/options-oi.js?v=37"></script>
+<script src="js/margin.js?v=37"></script>
+</body>
+</html>

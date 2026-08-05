@@ -1,0 +1,11 @@
+[build]
+  publish = "."
+  command = ""
+  functions = "netlify/functions"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+
+# 手機請直接開 /mobile.html（Netlify redirect 不支援 User-Agent 條件，寫了會導致部署失敗）
