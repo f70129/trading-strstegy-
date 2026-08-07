@@ -1509,20 +1509,30 @@ function calcMA(arr, period) {
 }
 
 function calcAllMA(closes) {
-  return {
+  const mas = {
     ma5:   calcMA(closes, 5),
     ma10:  calcMA(closes, 10),
     ma20:  calcMA(closes, 20),
     ma21:  calcMA(closes, 21),
+    ma34:  calcMA(closes, 34),
     ma55:  calcMA(closes, 55),
     ma80:  calcMA(closes, 80),
     ma144: calcMA(closes, 144),
     ma233: calcMA(closes, 233),
   };
+  if (closes.length >= 26) {
+    const ma21Lag = calcMA(closes.slice(0, -5), 21);
+    mas.ma21SlopePct = mas.ma21 && ma21Lag ? ((mas.ma21 - ma21Lag) / ma21Lag) * 100 : 0;
+  } else {
+    mas.ma21SlopePct = 0;
+  }
+  mas.ma21Up = mas.ma21SlopePct > 0.05;
+  mas.ma21Down = mas.ma21SlopePct < -0.05;
+  return mas;
 }
 
 // =====================================================
-// 多單 / 空單判斷（21日 + 月線20 + 季線80）
+// 多單 / 空單判斷（MA21↑ + 突破 34/55/季線80）
 // =====================================================
 function classifyTradeBias(price, mas) {
   if (!price || !mas.ma21) {
@@ -1531,51 +1541,62 @@ function classifyTradeBias(price, mas) {
 
   const above21 = price > mas.ma21;
   const below21 = price < mas.ma21;
-  const aboveMonth = mas.ma20 ? price > mas.ma20 : true;
-  const belowMonth = mas.ma20 ? price < mas.ma20 : true;
-  const aboveQuarter = mas.ma80 ? price > mas.ma80 : true;
-  const belowQuarter = mas.ma80 ? price < mas.ma80 : true;
-  const monthResist = mas.ma20 && price < mas.ma20;
-  const quarterResist = mas.ma80 && price < mas.ma80;
-  const monthSupport = mas.ma20 && price > mas.ma20;
-  const quarterSupport = mas.ma80 && price > mas.ma80;
+  const resist34 = mas.ma34 && price < mas.ma34;
+  const resist55 = mas.ma55 && price < mas.ma55;
+  const resistQ = mas.ma80 && price < mas.ma80;
+  const sup34 = mas.ma34 && price > mas.ma34;
+  const sup55 = mas.ma55 && price > mas.ma55;
+  const supQ = mas.ma80 && price > mas.ma80;
+  const allBroken = !resist34 && !resist55 && !resistQ;
+  const allBrokenDown = !sup34 && !sup55 && !supQ;
+  const slopeTxt = mas.ma21SlopePct != null
+    ? `${mas.ma21SlopePct >= 0 ? '+' : ''}${mas.ma21SlopePct.toFixed(2)}%`
+    : '—';
 
-  if (above21 && aboveMonth && aboveQuarter) {
+  if (above21 && mas.ma21Up && allBroken) {
     return {
       bias: 'long',
       label: '多單',
       tag: 'bull',
-      action: '站穩 21 日且已突破月線、季線，可順勢做多',
-      reason: '價格 > MA21 · 月線(20) · 季線(80)',
+      action: '站上 21 日且均線向上，已突破 34/55/季線，可順勢做多',
+      reason: `MA21↑(${slopeTxt}) · 價格 > 34日 · 55日 · 季線(80)`,
     };
   }
-  if (above21 && (monthResist || quarterResist)) {
-    const blocked = [monthResist && '月線', quarterResist && '季線'].filter(Boolean).join('、');
+  if (above21 && (!mas.ma21Up || !allBroken)) {
+    const issues = [];
+    if (!mas.ma21Up) issues.push(`21日線未向上(${slopeTxt})`);
+    if (resist34) issues.push('34日');
+    if (resist55) issues.push('55日');
+    if (resistQ) issues.push('季線');
     return {
       bias: 'bounce_long',
       label: '跌深反彈',
       tag: 'caution',
-      action: `上方仍有 ${blocked} 壓力，需突破後才論多`,
-      reason: `站上 21 日但未突破 ${blocked}`,
+      action: `未達多單條件：${issues.join('、')}，需全部滿足才論多`,
+      reason: `站上 21 日但 ${issues.join('、')}`,
     };
   }
-  if (below21 && belowMonth && belowQuarter) {
+  if (below21 && mas.ma21Down && allBrokenDown) {
     return {
       bias: 'short',
       label: '空單',
       tag: 'bear',
-      action: '跌破 21 日且月線、季線皆在上方，可順勢放空',
-      reason: '價格 < MA21 · 月線(20) · 季線(80)',
+      action: '跌破 21 日且均線向下，34/55/季線皆在上方，可順勢放空',
+      reason: `MA21↓(${slopeTxt}) · 價格 < 34日 · 55日 · 季線(80)`,
     };
   }
-  if (below21 && (monthSupport || quarterSupport)) {
-    const held = [monthSupport && '月線', quarterSupport && '季線'].filter(Boolean).join('、');
+  if (below21 && (!mas.ma21Down || !allBrokenDown)) {
+    const issues = [];
+    if (!mas.ma21Down) issues.push(`21日線未向下(${slopeTxt})`);
+    if (sup34) issues.push('34日');
+    if (sup55) issues.push('55日');
+    if (supQ) issues.push('季線');
     return {
       bias: 'bounce_short',
       label: '反彈空',
       tag: 'caution',
-      action: `下方 ${held} 仍有支撐，需跌破後才論空`,
-      reason: `跌破 21 日但 ${held} 仍在下方`,
+      action: `未達空單條件：${issues.join('、')}，需全部滿足才論空`,
+      reason: `跌破 21 日但 ${issues.join('、')}`,
     };
   }
 
@@ -2400,9 +2421,9 @@ function renderTargetInfo(info) {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       ${[['MA21', info.ma21, info.price > info.ma21],
-         ['月線20', info.ma20, info.price > info.ma20],
-         ['季線80', info.ma80, info.price > info.ma80],
+         ['MA34', info.ma34, info.price > info.ma34],
          ['MA55', info.ma55, info.price > info.ma55],
+         ['季線80', info.ma80, info.price > info.ma80],
          ['MA144', info.ma144, info.price > info.ma144]].map(([label, val, above]) => val ? `
         <div style="flex:1;min-width:80px;" class="stat-card">
           <div class="stat-label">${label}</div>
@@ -2552,21 +2573,24 @@ function renderTrendSystem(price, mas, symbol) {
   if (mas.ma5 && price > mas.ma5) score++;
   if (mas.ma10 && price > mas.ma10) score++;
   if (mas.ma21 && price > mas.ma21) score += 2;
-  if (mas.ma20 && price > mas.ma20) score += 2;
-  if (mas.ma55 && price > mas.ma55) score++;
+  if (mas.ma21Up) score += 2;
+  if (mas.ma34 && price > mas.ma34) score += 2;
+  if (mas.ma55 && price > mas.ma55) score += 2;
   if (mas.ma80 && price > mas.ma80) score += 2;
-  if (mas.ma144 && price > mas.ma144) score += 2;
-  if (mas.ma233 && price > mas.ma233) score++;
-  const maxScore = 12;
+  if (mas.ma144 && price > mas.ma144) score++;
+  const maxScore = 14;
   const scorePct = (score / maxScore * 100).toFixed(0);
+  const slopeTxt = mas.ma21SlopePct != null
+    ? `${mas.ma21SlopePct >= 0 ? '+' : ''}${mas.ma21SlopePct.toFixed(2)}%`
+    : '—';
 
   const maChecks = [
-    ['MA21', mas.ma21, price > (mas.ma21 || 0), '21日（多單門檻）', true],
-    ['月線 MA20', mas.ma20, price > (mas.ma20 || 0), '月線 · 須突破', true],
-    ['季線 MA80', mas.ma80, price > (mas.ma80 || 0), '季線 · 須突破', true],
-    ['MA55', mas.ma55, price > (mas.ma55 || 0), '中期', false],
+    ['MA21', mas.ma21, price > (mas.ma21 || 0), '21日 · 須站上', true],
+    ['MA21斜率', null, mas.ma21Up, `5日斜率 ${slopeTxt} · 須向上`, true],
+    ['MA34', mas.ma34, price > (mas.ma34 || 0), '34日 · 須突破', true],
+    ['MA55', mas.ma55, price > (mas.ma55 || 0), '55日 · 須突破', true],
+    ['季線80', mas.ma80, price > (mas.ma80 || 0), '季線 · 須突破', true],
     ['MA144', mas.ma144, price > (mas.ma144 || 0), '長期', false],
-    ['MA233', mas.ma233, price > (mas.ma233 || 0), '超長', false],
   ];
 
   document.getElementById('trendSystem').innerHTML = `
@@ -2576,7 +2600,7 @@ function renderTrendSystem(price, mas, symbol) {
       </span>
       <div style="font-size:11px;color:var(--accent);margin-top:6px;line-height:1.5;">${bias.action}</div>
       ${isTwStock ? `<div style="font-size:10px;color:var(--muted);margin-top:4px;">
-        台股規則：多單須站上 21 日且突破月線、季線；否則視為跌深反彈 · 空單反之
+        台股規則：多單 = 站上21日 + MA21向上 + 突破34/55/季線；空單反之
       </div>` : `<div style="font-size:10px;color:var(--muted);margin-top:4px;">${bias.reason}</div>`}
     </div>
     <div style="margin-bottom:10px;">
@@ -2589,11 +2613,11 @@ function renderTrendSystem(price, mas, symbol) {
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px;">
-      ${maChecks.filter(([, val]) => val).map(([label, val, above, sub, key]) => `
+      ${maChecks.filter(([, val, , , key]) => val != null || key).map(([label, val, above, sub, key]) => `
         <div style="background:#0d1526;border-radius:4px;padding:6px 8px;border:1px solid ${above ? 'rgba(0,255,136,.3)' : key ? 'rgba(255,149,0,.5)' : 'rgba(255,68,102,.3)'};">
           <div style="color:var(--muted);">${sub}${key && !above ? ' ⚠' : ''}</div>
           <div class="${above ? 'up' : 'down'}">${above ? '▲' : '▼'} ${label.replace('MA','')}</div>
-          <div style="color:var(--muted);font-size:10px;">${val.toFixed(1)}</div>
+          ${val != null ? `<div style="color:var(--muted);font-size:10px;">${val.toFixed(1)}</div>` : ''}
         </div>`).join('')}
     </div>
   `;
@@ -3305,7 +3329,7 @@ if ('serviceWorker' in navigator) {
     _swReloaded = true;
     location.reload();
   });
-  navigator.serviceWorker.register('sw.js?v=39').then((reg) => {
+  navigator.serviceWorker.register('sw.js?v=40').then((reg) => {
     reg.update();
     setInterval(() => reg.update(), 60 * 60 * 1000);
   }).catch(() => {});
