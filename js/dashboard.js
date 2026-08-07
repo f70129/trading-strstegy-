@@ -1500,21 +1500,87 @@ function calcAllMA(closes) {
   return {
     ma5:   calcMA(closes, 5),
     ma10:  calcMA(closes, 10),
+    ma20:  calcMA(closes, 20),
     ma21:  calcMA(closes, 21),
     ma55:  calcMA(closes, 55),
+    ma80:  calcMA(closes, 80),
     ma144: calcMA(closes, 144),
     ma233: calcMA(closes, 233),
   };
 }
 
 // =====================================================
-// TREND DETERMINATION
+// 多單 / 空單判斷（21日 + 月線20 + 季線80）
 // =====================================================
+function classifyTradeBias(price, mas) {
+  if (!price || !mas.ma21) {
+    return { bias: 'neutral', label: '觀望', tag: 'sideways', action: '均線資料不足', reason: '—' };
+  }
+
+  const above21 = price > mas.ma21;
+  const below21 = price < mas.ma21;
+  const aboveMonth = mas.ma20 ? price > mas.ma20 : true;
+  const belowMonth = mas.ma20 ? price < mas.ma20 : true;
+  const aboveQuarter = mas.ma80 ? price > mas.ma80 : true;
+  const belowQuarter = mas.ma80 ? price < mas.ma80 : true;
+  const monthResist = mas.ma20 && price < mas.ma20;
+  const quarterResist = mas.ma80 && price < mas.ma80;
+  const monthSupport = mas.ma20 && price > mas.ma20;
+  const quarterSupport = mas.ma80 && price > mas.ma80;
+
+  if (above21 && aboveMonth && aboveQuarter) {
+    return {
+      bias: 'long',
+      label: '多單',
+      tag: 'bull',
+      action: '站穩 21 日且已突破月線、季線，可順勢做多',
+      reason: '價格 > MA21 · 月線(20) · 季線(80)',
+    };
+  }
+  if (above21 && (monthResist || quarterResist)) {
+    const blocked = [monthResist && '月線', quarterResist && '季線'].filter(Boolean).join('、');
+    return {
+      bias: 'bounce_long',
+      label: '跌深反彈',
+      tag: 'caution',
+      action: `上方仍有 ${blocked} 壓力，需突破後才論多`,
+      reason: `站上 21 日但未突破 ${blocked}`,
+    };
+  }
+  if (below21 && belowMonth && belowQuarter) {
+    return {
+      bias: 'short',
+      label: '空單',
+      tag: 'bear',
+      action: '跌破 21 日且月線、季線皆在上方，可順勢放空',
+      reason: '價格 < MA21 · 月線(20) · 季線(80)',
+    };
+  }
+  if (below21 && (monthSupport || quarterSupport)) {
+    const held = [monthSupport && '月線', quarterSupport && '季線'].filter(Boolean).join('、');
+    return {
+      bias: 'bounce_short',
+      label: '反彈空',
+      tag: 'caution',
+      action: `下方 ${held} 仍有支撐，需跌破後才論空`,
+      reason: `跌破 21 日但 ${held} 仍在下方`,
+    };
+  }
+
+  return {
+    bias: 'neutral',
+    label: '觀望',
+    tag: 'sideways',
+    action: '21 日線附近或均線交錯，等待方向確認',
+    reason: '未符合多單或空單完整條件',
+  };
+}
+
 function determineTrend(price, ma) {
-  if (!price || !ma.ma21 || !ma.ma144) return 'neutral';
-  if (price > ma.ma21 && price > ma.ma144) return 'bull';
-  if (price < ma.ma144) return 'bear';
-  if (price > ma.ma21 && price < ma.ma144) return 'caution';
+  const b = classifyTradeBias(price, ma);
+  if (b.bias === 'long') return 'bull';
+  if (b.bias === 'short') return 'bear';
+  if (b.bias === 'bounce_long' || b.bias === 'bounce_short') return 'caution';
   return 'neutral';
 }
 
@@ -1645,55 +1711,207 @@ async function fetchFibSwingRange(ySymbol, closes, timestamps) {
 }
 
 // =====================================================
-// ELLIOTT WAVE (simplified pattern detection)
+// ELLIOTT WAVE — 轉折結構 + 基本規則驗證
 // =====================================================
+function elliottFilterAlternatingPivots(pivots) {
+  if (!pivots?.length) return [];
+  const out = [pivots[0]];
+  for (let i = 1; i < pivots.length; i++) {
+    const prev = out[out.length - 1];
+    const cur = pivots[i];
+    if (cur.type === prev.type) {
+      if (cur.type === 'high' && cur.price >= prev.price) out[out.length - 1] = cur;
+      else if (cur.type === 'low' && cur.price <= prev.price) out[out.length - 1] = cur;
+    } else {
+      out.push(cur);
+    }
+  }
+  return out;
+}
+
+function elliottBuildPivots(closes, lookback = 100) {
+  const series = closes.slice(-lookback);
+  const base = closes.length - series.length;
+  const halfWindow = Math.max(2, Math.min(5, Math.floor(series.length / 25)));
+  const raw = hurstFindSwings(series, halfWindow);
+  const pivots = raw.map(s => ({
+    i: s.i + base,
+    price: series[s.i],
+    type: s.type === 'peak' ? 'high' : 'low',
+  }));
+  return elliottFilterAlternatingPivots(pivots);
+}
+
+function elliottLegs(pivots) {
+  const legs = [];
+  for (let i = 0; i < pivots.length - 1; i++) {
+    const a = pivots[i];
+    const b = pivots[i + 1];
+    const delta = b.price - a.price;
+    legs.push({
+      from: a,
+      to: b,
+      up: delta > 0,
+      abs: Math.abs(delta),
+      pct: a.price ? (delta / a.price) * 100 : 0,
+    });
+  }
+  return legs;
+}
+
+/** 驗證五浪推進（寬鬆版，適用指數日K） */
+function elliottScoreImpulse(legs, bullish) {
+  const notes = [];
+  let score = 55;
+  if (legs.length < 3) return { score: 25, notes: ['轉折不足，僅供參考'] };
+
+  const dirOk = (leg, up) => (up ? leg.up : !leg.up);
+  const w1 = legs[0];
+  const w2 = legs[1];
+  const w3 = legs[2];
+
+  if (!dirOk(w1, bullish)) notes.push('第1段方向與趨勢不一致');
+  else score += 8;
+
+  if (legs.length >= 2) {
+    const retrace2 = w1.abs > 0 ? w2.abs / w1.abs : 0;
+    if (retrace2 > 1) notes.push('浪2回撤超過100%（結構破壞）');
+    else if (retrace2 >= 0.382 && retrace2 <= 0.786) { score += 12; notes.push(`浪2回撤 ${(retrace2 * 100).toFixed(0)}%（合理）`); }
+    else if (retrace2 < 0.382) { score += 6; notes.push(`浪2回撤偏淺 ${(retrace2 * 100).toFixed(0)}%`); }
+    else { score += 4; notes.push(`浪2回撤偏深 ${(retrace2 * 100).toFixed(0)}%`); }
+  }
+
+  if (legs.length >= 3) {
+    if (!dirOk(w3, bullish)) notes.push('浪3方向錯誤');
+    else {
+      score += 10;
+      if (w3.abs >= w1.abs * 0.9) { score += 10; notes.push('浪3動能不低於浪1'); }
+      else notes.push('浪3短於浪1（弱勢推進）');
+    }
+  }
+
+  if (legs.length >= 4) {
+    const w4 = legs[3];
+    const retrace4 = w3.abs > 0 ? w4.abs / w3.abs : 0;
+    if (bullish && w4.to.price < w1.to.price) notes.push('浪4跌破浪1高點（重疊，修正浪可能）');
+    else if (retrace4 <= 0.5) score += 8;
+    if (retrace4 > 0.618) notes.push('浪4回撤偏深');
+  }
+
+  if (legs.length >= 5) {
+    const w5 = legs[4];
+    if (dirOk(w5, bullish)) score += 5;
+  }
+
+  return { score: Math.min(95, score), notes };
+}
+
+function elliottScoreCorrection(legs, bullish) {
+  const notes = [];
+  let score = 50;
+  if (legs.length < 2) return { score: 30, notes: ['修正結構不明'] };
+  const downFirst = !legs[0].up;
+  if (bullish ? downFirst : !downFirst) score += 15;
+  else notes.push('修正方向與主趨勢不一致');
+  if (legs.length >= 3 && legs[2].abs >= legs[0].abs * 0.8) { score += 15; notes.push('C 浪延伸合理'); }
+  return { score: Math.min(90, score), notes };
+}
+
+function elliottInferWave(pivots, currentPrice, bullish) {
+  if (pivots.length < 2) {
+    return { wavePos: '?', phase: '資料不足', structure: 'unknown' };
+  }
+
+  let seq = pivots;
+  if (bullish) {
+    const i0 = pivots.findIndex(p => p.type === 'low');
+    if (i0 >= 0) seq = pivots.slice(i0);
+  } else {
+    const i0 = pivots.findIndex(p => p.type === 'high');
+    if (i0 >= 0) seq = pivots.slice(i0);
+  }
+
+  const last = seq[seq.length - 1];
+  const rising = currentPrice >= last.price;
+  const legs = seq.length - 1;
+
+  if (bullish) {
+    if (last.type === 'high') {
+      const oddDone = legs % 2 === 1 ? legs : Math.max(1, legs - 1);
+      if (rising) return { wavePos: Math.min(oddDone, 5), phase: '推升延伸', structure: oddDone >= 5 ? 'corrective' : 'impulse' };
+      const next = oddDone + 1;
+      if (next <= 5) return { wavePos: next, phase: '回調整理', structure: 'impulse' };
+      return { wavePos: 'A', phase: '五浪後修正', structure: 'corrective' };
+    }
+    const evenDone = legs % 2 === 0 ? legs : Math.max(2, legs - 1);
+    if (rising) return { wavePos: Math.min(evenDone + 1, 5), phase: '回升推進', structure: 'impulse' };
+    return { wavePos: Math.min(evenDone, 4) || 2, phase: '調整段', structure: 'impulse' };
+  }
+
+  // 空頭：修正浪 A-B-C 或逆勢反彈
+  if (last.type === 'low') {
+    const oddDone = legs % 2 === 1 ? legs : Math.max(1, legs - 1);
+    if (!rising) return { wavePos: oddDone >= 3 ? 'C' : 'A', phase: '下跌延伸', structure: 'corrective' };
+    return { wavePos: 'B', phase: '反彈修正', structure: 'corrective' };
+  }
+  if (!rising) return { wavePos: 'C', phase: '末跌段', structure: 'corrective' };
+  return { wavePos: 'B', phase: '逃命反彈', structure: 'corrective' };
+}
+
+const ELLIOTT_WAVE_META = {
+  1: { desc: '推進浪 1 · 初升/初跌段', action: '觀察是否放量突破，勿追高追低' },
+  2: { desc: '調整浪 2 · 回測起漲低點', action: '等回測 38.2%–61.8% 區間再評估進場' },
+  3: { desc: '推進浪 3 · 主升/主跌段（通常最強）', action: '順勢為主，移動停利' },
+  4: { desc: '調整浪 4 · 旗形/箱形整理', action: '避免追價，等待浪5 或轉折訊號' },
+  5: { desc: '推進浪 5 · 末升/末跌段', action: '留意背離與量能衰退，準備減倉' },
+  A: { desc: '修正浪 A · 首段修正', action: '減碼/避險，勿視為新趨勢起點' },
+  B: { desc: '修正浪 B · 逃命反彈', action: '反彈逢高減多，不宜當新多頭' },
+  C: { desc: '修正浪 C · 末段修正', action: '等待 C 浪完成後再尋找轉折' },
+  '?': { desc: '結構不明', action: '以均線+量價為主，波浪僅參考' },
+};
+
 function detectElliottWave(closes, currentPrice, mas) {
   if (closes.length < 50) return null;
-  const recent = closes.slice(-50);
-  const trend = determineTrend(currentPrice, mas);
 
-  // Find swing points in recent data
-  let swings = [];
-  for (let i = 2; i < recent.length-2; i++) {
-    if (recent[i] > recent[i-1] && recent[i] > recent[i-2] && recent[i] > recent[i+1] && recent[i] > recent[i+2]) {
-      swings.push({ i, price: recent[i], type: 'high' });
-    }
-    if (recent[i] < recent[i-1] && recent[i] < recent[i-2] && recent[i] < recent[i+1] && recent[i] < recent[i+2]) {
-      swings.push({ i, price: recent[i], type: 'low' });
-    }
+  const trend = determineTrend(currentPrice, mas);
+  const bias = classifyTradeBias(currentPrice, mas);
+  const bullish = bias.bias === 'long';
+  const bearish = bias.bias === 'short';
+
+  const pivots = elliottBuildPivots(closes, Math.min(120, closes.length));
+  const recent = pivots.slice(-7);
+  const infer = elliottInferWave(recent, currentPrice, !bearish);
+
+  let legs = elliottLegs(recent);
+  let scoring;
+  if (infer.structure === 'corrective' || ['A', 'B', 'C'].includes(String(infer.wavePos))) {
+    scoring = elliottScoreCorrection(legs.slice(-3), !bearish);
+  } else {
+    scoring = elliottScoreImpulse(legs.slice(0, 5), !bearish);
   }
 
-  // Determine wave position based on price vs MA and recent momentum
   const last20 = closes.slice(-20);
   const last5 = closes.slice(-5);
-  const momentum20 = (last20[last20.length-1] - last20[0]) / last20[0] * 100;
-  const momentum5 = (last5[last5.length-1] - last5[0]) / last5[0] * 100;
+  const momentum20 = last20.length > 1 ? ((last20[last20.length - 1] - last20[0]) / last20[0]) * 100 : 0;
+  const momentum5 = last5.length > 1 ? ((last5[last5.length - 1] - last5[0]) / last5[0]) * 100 : 0;
 
-  let wavePos, waveDesc, action;
+  const meta = ELLIOTT_WAVE_META[String(infer.wavePos)] || ELLIOTT_WAVE_META['?'];
+  const pivotSummary = recent.length >= 2
+    ? `近 ${Math.min(120, closes.length)} 日 ${recent.length} 個轉折 · 末點 ${recent[recent.length - 1].type === 'high' ? '高' : '低'} ${recent[recent.length - 1].price.toLocaleString(undefined, { maximumFractionDigits: 1 })}`
+    : '轉折點不足';
 
-  if (trend === 'bull') {
-    if (momentum20 > 5 && momentum5 > 2) {
-      wavePos = 3; waveDesc = '推進浪 3 (最強勢浪)'; action = '順勢持倉';
-    } else if (momentum20 > 2 && momentum5 < 0) {
-      wavePos = 4; waveDesc = '調整浪 4 (回調整理)'; action = '等待回調完成';
-    } else if (momentum20 > 0 && momentum5 > 1) {
-      wavePos = 5; waveDesc = '推進浪 5 (末升段)'; action = '注意頂背離';
-    } else {
-      wavePos = 1; waveDesc = '推進浪 1 (初升段)'; action = '輕倉試單';
-    }
-  } else if (trend === 'bear') {
-    if (momentum20 < -5 && momentum5 < -2) {
-      wavePos = 'C'; waveDesc = '調整浪 C (最後跌段)'; action = '逢彈做空';
-    } else if (momentum20 < -2 && momentum5 > 0) {
-      wavePos = 'B'; waveDesc = '調整浪 B (逃命波)'; action = '逢高減多/做空';
-    } else {
-      wavePos = 'A'; waveDesc = '調整浪 A (首跌段)'; action = '開始減倉';
-    }
-  } else {
-    wavePos = 2; waveDesc = '調整浪 2 (回測支撐)'; action = '等待入場時機';
-  }
-
-  return { wavePos, waveDesc, action, momentum20: momentum20.toFixed(1), momentum5: momentum5.toFixed(1), trend };
+  return {
+    wavePos: infer.wavePos,
+    waveDesc: `${meta.desc}（${infer.phase}）`,
+    action: meta.action,
+    momentum20: momentum20.toFixed(1),
+    momentum5: momentum5.toFixed(1),
+    trend: trend === 'caution' ? 'sideways' : trend,
+    confidence: scoring.score,
+    ruleNotes: scoring.notes,
+    pivotSummary,
+    structure: infer.structure,
+  };
 }
 
 // =====================================================
@@ -2109,8 +2327,8 @@ function renderMarketOverview(markets) {
         ${m.change >= 0 ? '▲' : '▼'} ${Math.abs(m.change).toFixed(2)} (${m.changePct.toFixed(2)}%)
       </div>
       <div class="signal-row" style="margin-top:6px;">
-        <span class="signal-pill ${m.trend === 'bull' ? 'bull' : m.trend === 'bear' ? 'bear' : 'sideways'}">
-          ${m.trend === 'bull' ? '多頭' : m.trend === 'bear' ? '空頭' : '盤整'}
+        <span class="signal-pill ${m.tradeTag || (m.trend === 'bull' ? 'bull' : m.trend === 'bear' ? 'bear' : 'sideways')}">
+          ${m.tradeLabel || (m.trend === 'bull' ? '多頭' : m.trend === 'bear' ? '空頭' : '盤整')}
         </span>
         ${m.above21ma ? '<span class="signal-pill bull">MA21↑</span>' : '<span class="signal-pill bear">MA21↓</span>'}
       </div>
@@ -2170,9 +2388,10 @@ function renderTargetInfo(info) {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       ${[['MA21', info.ma21, info.price > info.ma21],
+         ['月線20', info.ma20, info.price > info.ma20],
+         ['季線80', info.ma80, info.price > info.ma80],
          ['MA55', info.ma55, info.price > info.ma55],
-         ['MA144', info.ma144, info.price > info.ma144],
-         ['MA233', info.ma233, info.price > info.ma233]].map(([label, val, above]) => val ? `
+         ['MA144', info.ma144, info.price > info.ma144]].map(([label, val, above]) => val ? `
         <div style="flex:1;min-width:80px;" class="stat-card">
           <div class="stat-label">${label}</div>
           <div class="stat-value ${above ? 'up' : 'down'}" style="font-size:14px;">${val.toLocaleString(undefined,{maximumFractionDigits:1})}</div>
@@ -2312,34 +2531,45 @@ function renderVolumeAnalysis(closes, volumes) {
 // =====================================================
 function renderTrendSystem(price, mas, symbol) {
   const isTwStock = symbol.endsWith('.TW') || symbol === '^TWII';
+  const bias = classifyTradeBias(price, mas);
   const trend = determineTrend(price, mas);
-  const trendLabel = { bull:'多頭', bear:'空頭', caution:'觀望', neutral:'盤整' }[trend];
   const trendClass = { bull:'bull', bear:'bear', caution:'sideways', neutral:'sideways' }[trend];
+  const biasClass = bias.tag === 'bull' ? 'bull' : bias.tag === 'bear' ? 'bear' : bias.tag === 'caution' ? 'gold' : 'sideways';
 
-  // Score
   let score = 0;
   if (mas.ma5 && price > mas.ma5) score++;
   if (mas.ma10 && price > mas.ma10) score++;
   if (mas.ma21 && price > mas.ma21) score += 2;
+  if (mas.ma20 && price > mas.ma20) score += 2;
   if (mas.ma55 && price > mas.ma55) score++;
-  if (mas.ma144 && price > mas.ma144) score += 3;
+  if (mas.ma80 && price > mas.ma80) score += 2;
+  if (mas.ma144 && price > mas.ma144) score += 2;
   if (mas.ma233 && price > mas.ma233) score++;
-  const maxScore = 9;
+  const maxScore = 12;
   const scorePct = (score / maxScore * 100).toFixed(0);
+
+  const maChecks = [
+    ['MA21', mas.ma21, price > (mas.ma21 || 0), '21日（多單門檻）', true],
+    ['月線 MA20', mas.ma20, price > (mas.ma20 || 0), '月線 · 須突破', true],
+    ['季線 MA80', mas.ma80, price > (mas.ma80 || 0), '季線 · 須突破', true],
+    ['MA55', mas.ma55, price > (mas.ma55 || 0), '中期', false],
+    ['MA144', mas.ma144, price > (mas.ma144 || 0), '長期', false],
+    ['MA233', mas.ma233, price > (mas.ma233 || 0), '超長', false],
+  ];
 
   document.getElementById('trendSystem').innerHTML = `
     <div style="text-align:center;margin-bottom:12px;">
-      <span class="trend-badge ${trendClass}" style="font-size:16px;padding:6px 20px;">
-        ${trend === 'bull' ? '▲' : trend === 'bear' ? '▼' : '◆'} ${trendLabel}
+      <span class="trend-badge ${biasClass}" style="font-size:16px;padding:6px 20px;">
+        ${bias.bias === 'long' ? '▲' : bias.bias === 'short' ? '▼' : '◆'} ${bias.label}
       </span>
-      ${isTwStock ? `<div style="font-size:10px;color:var(--muted);margin-top:6px;">
-        台股判斷: ${mas.ma21 && price > mas.ma21 ? '✅ 21MA以上多頭' : '❌ 21MA以下'}
-        ${mas.ma144 && price < mas.ma144 ? ' | ⚠️ 破144MA空頭' : ''}
-      </div>` : ''}
+      <div style="font-size:11px;color:var(--accent);margin-top:6px;line-height:1.5;">${bias.action}</div>
+      ${isTwStock ? `<div style="font-size:10px;color:var(--muted);margin-top:4px;">
+        台股規則：多單須站上 21 日且突破月線、季線；否則視為跌深反彈 · 空單反之
+      </div>` : `<div style="font-size:10px;color:var(--muted);margin-top:4px;">${bias.reason}</div>`}
     </div>
     <div style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-        <span style="color:var(--muted);font-size:11px;">多頭強度評分</span>
+        <span style="color:var(--muted);font-size:11px;">均線站穩度</span>
         <span class="${parseInt(scorePct) > 60 ? 'up' : parseInt(scorePct) > 40 ? 'gold' : 'down'}">${score}/${maxScore} (${scorePct}%)</span>
       </div>
       <div class="progress-wrap">
@@ -2347,17 +2577,12 @@ function renderTrendSystem(price, mas, symbol) {
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px;">
-      ${[
-        ['價格 vs MA21', mas.ma21, price > (mas.ma21||0), '主要趨勢'],
-        ['價格 vs MA55', mas.ma55, price > (mas.ma55||0), '中期趨勢'],
-        ['價格 vs MA144', mas.ma144, price > (mas.ma144||0), '長期趨勢'],
-        ['價格 vs MA233', mas.ma233, price > (mas.ma233||0), '超長趨勢'],
-      ].map(([label, val, above, sub]) => val ? `
-        <div style="background:#0d1526;border-radius:4px;padding:6px 8px;border:1px solid ${above ? 'rgba(0,255,136,.3)' : 'rgba(255,68,102,.3)'};">
-          <div style="color:var(--muted);">${sub}</div>
-          <div class="${above ? 'up' : 'down'}">${above ? '▲' : '▼'} ${label.split(' vs ')[1]}</div>
+      ${maChecks.filter(([, val]) => val).map(([label, val, above, sub, key]) => `
+        <div style="background:#0d1526;border-radius:4px;padding:6px 8px;border:1px solid ${above ? 'rgba(0,255,136,.3)' : key ? 'rgba(255,149,0,.5)' : 'rgba(255,68,102,.3)'};">
+          <div style="color:var(--muted);">${sub}${key && !above ? ' ⚠' : ''}</div>
+          <div class="${above ? 'up' : 'down'}">${above ? '▲' : '▼'} ${label.replace('MA','')}</div>
           <div style="color:var(--muted);font-size:10px;">${val.toFixed(1)}</div>
-        </div>` : '').join('')}
+        </div>`).join('')}
     </div>
   `;
 }
@@ -2368,20 +2593,32 @@ function renderTrendSystem(price, mas, symbol) {
 function renderElliottWave(wave) {
   if (!wave) { document.getElementById('elliottWave').innerHTML = '<div class="loading">數據不足</div>'; return; }
 
-  const waveColors = { 1:'up', 2:'gold', 3:'up', 4:'gold', 5:'purple', A:'down', B:'gold', C:'down' };
+  const waveColors = { 1:'up', 2:'gold', 3:'up', 4:'gold', 5:'purple', A:'down', B:'gold', C:'down', '?':'neutral' };
   const allWaves = ['1','2','3','4','5','A','B','C'];
+  const conf = wave.confidence ?? 50;
+  const confClass = conf >= 70 ? 'up' : conf >= 45 ? 'gold' : 'down';
+  const rulesHtml = (wave.ruleNotes || []).slice(0, 3).map(n => `· ${n}`).join('<br>');
 
   document.getElementById('elliottWave').innerHTML = `
     <div class="signal-row" style="margin-bottom:10px;">
       <span class="trend-badge ${wave.trend === 'bull' ? 'bull' : wave.trend === 'bear' ? 'bear' : 'sideways'}" style="font-size:13px;">
         當前浪位: <strong>浪 ${wave.wavePos}</strong>
       </span>
+      <span class="signal-pill ${confClass}" style="margin-left:6px;">可信度 ${conf}%</span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;line-height:1.6;">
+      ${wave.pivotSummary || ''}<br>
+      算法：日K 轉折結構（非分K）· 自動標記，需人工確認
     </div>
     <div class="stat-card" style="margin-bottom:10px;border-color:var(--gold);">
       <div class="stat-label">浪型描述</div>
       <div style="font-size:14px;color:var(--gold);margin:4px 0;">${wave.waveDesc}</div>
       <div style="color:var(--accent);font-size:12px;">建議操作：${wave.action}</div>
     </div>
+    ${rulesHtml ? `<div class="stat-card" style="margin-bottom:10px;font-size:11px;line-height:1.6;">
+      <div class="stat-label">結構檢核</div>
+      <div style="color:var(--muted);">${rulesHtml}</div>
+    </div>` : ''}
     <div class="wave-grid">
       ${allWaves.slice(0,5).map(w => `
         <div class="wave-card" style="${String(wave.wavePos) === w ? 'border-color:var(--gold);' : ''}">
@@ -2393,11 +2630,21 @@ function renderElliottWave(wave) {
         </div>
       `).join('')}
     </div>
+    ${['A','B','C'].includes(String(wave.wavePos)) ? `
+    <div class="wave-grid" style="margin-top:6px;">
+      ${['A','B','C'].map(w => `
+        <div class="wave-card" style="${String(wave.wavePos) === w ? 'border-color:var(--gold);' : ''}">
+          <div class="wave-num ${String(wave.wavePos) === w ? 'gold' : ''}">${w}</div>
+          <div class="wave-type ${waveColors[w]}">修正</div>
+          ${String(wave.wavePos) === w ? '<div style="color:var(--gold);font-size:9px;margin-top:2px;">◀ 現在</div>' : ''}
+        </div>
+      `).join('')}
+    </div>` : ''}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;font-size:11px;">
-      <div class="stat-card"><div class="stat-label">20日動能</div>
+      <div class="stat-card"><div class="stat-label">20日動能（輔助）</div>
         <div class="${parseFloat(wave.momentum20) > 0 ? 'up' : 'down'}">${wave.momentum20 > 0 ? '+' : ''}${wave.momentum20}%</div>
       </div>
-      <div class="stat-card"><div class="stat-label">5日動能</div>
+      <div class="stat-card"><div class="stat-label">5日動能（輔助）</div>
         <div class="${parseFloat(wave.momentum5) > 0 ? 'up' : 'down'}">${wave.momentum5 > 0 ? '+' : ''}${wave.momentum5}%</div>
       </div>
     </div>
@@ -2688,9 +2935,9 @@ async function loadSymbol() {
 
     const trendEl = document.getElementById('step_trend');
     if (trendEl) {
-      const t = determineTrend(price, mas);
-      if (t === 'bull') trendEl.value = '多頭 (Bullish)';
-      else if (t === 'bear') trendEl.value = '空頭 (Bearish)';
+      const b = classifyTradeBias(price, mas);
+      if (b.bias === 'long') trendEl.value = '多頭 (Bullish)';
+      else if (b.bias === 'short') trendEl.value = '空頭 (Bearish)';
       else trendEl.value = '觀望';
     }
     calcAllSteps();
@@ -2719,12 +2966,15 @@ async function fetchMarketOverviewItem(idx) {
       const price = closes[closes.length - 1];
       const prev = closes[closes.length - 2];
       const change = price - prev;
+      const bias = classifyTradeBias(price, mas);
       return {
         name: idx.name,
         price: price.toLocaleString(undefined, { maximumFractionDigits: 1 }),
         change,
         changePct: (change / prev) * 100,
         trend: determineTrend(price, mas),
+        tradeLabel: bias.label,
+        tradeTag: bias.tag,
         above21ma: mas.ma21 && price > mas.ma21,
         source: 'FinMind',
       };
@@ -2745,12 +2995,15 @@ async function fetchMarketOverviewItem(idx) {
         };
       }
       const mas = calcAllMA(parsed.closes);
+      const bias = classifyTradeBias(parsed.price, mas);
       return {
         name: idx.name,
         price: parsed.price.toLocaleString(undefined, { maximumFractionDigits: 1 }),
         change: parsed.change,
         changePct: parsed.changePct,
         trend: determineTrend(parsed.price, mas),
+        tradeLabel: bias.label,
+        tradeTag: bias.tag,
         above21ma: mas.ma21 && parsed.price > mas.ma21,
         source: 'FRED',
       };
