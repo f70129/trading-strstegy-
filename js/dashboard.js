@@ -1404,6 +1404,18 @@ async function refreshRealtimeQuote(channel) {
     };
     state.lastTargetInfo = merged;
     renderTargetInfo(merged);
+    if (state.lastCloses?.length) {
+      const mas = calcAllMA(state.lastCloses);
+      const ySym = resolveSymbol(state.symbol);
+      renderTrendSystem(q.price, mas, ySym);
+      const trendEl = document.getElementById('step_trend');
+      if (trendEl) {
+        const b = classifyTradeBias(q.price, mas);
+        if (b.bias === 'long') trendEl.value = '多頭 (Bullish)';
+        else if (b.bias === 'short') trendEl.value = '空頭 (Bearish)';
+        else trendEl.value = '觀望';
+      }
+    }
     if (volume > 0 && state.lastCloses?.length && state.lastVolumes?.length) {
       state.lastVolumes = state.lastVolumes.slice();
       state.lastVolumes[state.lastVolumes.length - 1] = volume;
@@ -3293,7 +3305,7 @@ if ('serviceWorker' in navigator) {
     _swReloaded = true;
     location.reload();
   });
-  navigator.serviceWorker.register('sw.js').then((reg) => {
+  navigator.serviceWorker.register('sw.js?v=39').then((reg) => {
     reg.update();
     setInterval(() => reg.update(), 60 * 60 * 1000);
   }).catch(() => {});

@@ -2,6 +2,26 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
+<script>
+(function(){
+  var V='39';
+  if (localStorage.getItem('app_ver') === V) return;
+  localStorage.setItem('app_ver', V);
+  var reload = function(){ location.reload(); };
+  var jobs = [];
+  if ('serviceWorker' in navigator) {
+    jobs.push(navigator.serviceWorker.getRegistrations().then(function(rs){
+      return Promise.all(rs.map(function(r){ return r.unregister(); }));
+    }));
+  }
+  if (window.caches) {
+    jobs.push(caches.keys().then(function(ks){
+      return Promise.all(ks.map(function(k){ return caches.delete(k); }));
+    }));
+  }
+  (jobs.length ? Promise.all(jobs) : Promise.resolve()).then(reload).catch(reload);
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>台指交易分析看板</title>
 <link rel="manifest" href="manifest.json">
