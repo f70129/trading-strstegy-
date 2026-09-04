@@ -53,12 +53,11 @@ exports.handler = async (event) => {
   try {
     let useToken = queryToken || envToken;
     let data = await callFinMind(url, useToken);
-    if (
-      useToken
-      && !queryToken
-      && envToken
-      && (data.status === 400 || /illegal/i.test(data.msg || data.error || ''))
-    ) {
+    const needAnonRetry = (d) =>
+      d.status === 400
+      || d.status === 402
+      || /illegal|upper limit/i.test(d.msg || d.error || '');
+    if (useToken && needAnonRetry(data)) {
       data = await callFinMind(url, '');
     }
     if (data.status === 400 || /illegal/i.test(data.msg || data.error || '')) {

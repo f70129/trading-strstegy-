@@ -76,8 +76,68 @@ function quickSymbol(sym) {
 // REAL DATA — FinMind (台股/台指) + Yahoo (全球指數)
 // =====================================================
 const FINMIND_API = 'https://api.finmindtrade.com/api/v4/data';
-const TAIEX_CACHE_KEY = 'finmind_taiex_daily_v3';
 const TAIEX_VOL_CACHE_KEY = 'finmind_taiex_vol_v1';
+
+/** 加權「價格指數」合理區間（排除報酬指數等異常值） */
+function isValidTaiexClose(close) {
+  const c = Number(close);
+  return Number.isFinite(c) && c >= 4000 && c <= 35000;
+}
+
+function finMindPriceRowsToDailyBars(rows) {
+  const bars = [];
+  for (const r of rows || []) {
+    const close = Number(r.close ?? r.closing_index);
+    if (!isValidTaiexClose(close)) continue;
+    bars.push({
+      date: String(r.date).slice(0, 10),
+      open: Number(r.open) || close,
+      high: Number(r.max ?? r.high) || close,
+      low: Number(r.min ?? r.low) || close,
+      close,
+      volume: volumeFromRow(r),
+    });
+  }
+  return bars.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+async function fetchYahooTwiiDailyBars(days = 120) {
+  const range = days <= 30 ? '3mo' : days <= 90 ? '6mo' : '1y';
+  const end = new Date().toISOString().slice(0, 10);
+  const start = new Date(Date.now() - days * 86400000 * 1.6).toISOString().slice(0, 10);
+  const q = `symbol=${encodeURIComponent('^TWII')}&interval=1d&range=${range}`;
+  let json;
+  try {
+    json = await fetchYahooChartViaServer(q);
+  } catch (_) {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/%5ETWII?interval=1d&range=${range}`;
+    json = await fetchViaProxy(url);
+  }
+  const bars = yahooChartToBars(json, start, end)
+    .filter(b => isValidTaiexClose(b.close))
+    .map(b => ({ date: b.date, open: b.close, high: b.close, low: b.close, close: b.close, volume: 0 }));
+  if (bars.length < 10) throw new Error('Yahoo ^TWII 資料不足');
+  return bars;
+}
+
+async function fetchTwiiHistoricalByYear(startDate, endDate) {
+  const y0 = parseInt(startDate.slice(0, 4), 10);
+  const y1 = parseInt(endDate.slice(0, 4), 10);
+  const merged = [];
+  for (let y = y0; y <= y1; y++) {
+    const p1 = Math.floor(new Date(`${y}-01-01T12:00:00`).getTime() / 1000);
+    const p2 = Math.floor(new Date(`${y}-12-31T23:59:59`).getTime() / 1000);
+    const q = `symbol=${encodeURIComponent('^TWII')}&period1=${p1}&period2=${p2}`;
+    try {
+      const json = await fetchYahooChartViaServer(q);
+      merged.push(...yahooChartToBars(json, startDate, endDate).filter(b => isValidTaiexClose(b.close)));
+    } catch (_) { /* skip year */ }
+    await new Promise(r => setTimeout(r, 120));
+  }
+  const dedup = {};
+  for (const b of merged) dedup[b.date] = b;
+  return Object.values(dedup).sort((a, b) => a.date.localeCompare(b.date));
+}
 
 /** FinMind 成交量欄位（API 版本命名不一致） */
 function volumeFromRow(r, extraKeys = []) {
@@ -227,28 +287,37 @@ async function fetchFinMind(params) {
   Object.entries(params).forEach(([k, v]) => qs.set(k, v));
 
   const fetchers = [];
-  if (isCloudDeployed()) {
+  const cloudFetch = (withUserToken) => {
     const qCloud = new URLSearchParams(qs);
-    if (token) qCloud.set('token', token);
-    fetchers.push(() => fetch(`${cloudFn('finmind')}?${qCloud.toString()}`));
+    if (withUserToken && token) qCloud.set('token', token);
+    return async () => fetch(`${cloudFn('finmind')}?${qCloud.toString()}`, { signal: AbortSignal.timeout(60000) });
+  };
+
+  if (isCloudDeployed()) {
+    if (token) fetchers.push(cloudFetch(true));
+    fetchers.push(cloudFetch(false));
   } else if (token) {
     fetchers.push(
-      () => fetch(proxyUrl(`/finmind?${qs.toString()}&token=${encodeURIComponent(token)}`)),
-      () => fetch(`http://127.0.0.1:8787/finmind?${qs.toString()}&token=${encodeURIComponent(token)}`),
-      () => fetch(`http://localhost:8787/finmind?${qs.toString()}&token=${encodeURIComponent(token)}`),
+      () => fetch(proxyUrl(`/finmind?${qs.toString()}&token=${encodeURIComponent(token)}`), { signal: AbortSignal.timeout(60000) }),
+      () => fetch(`http://127.0.0.1:8787/finmind?${qs.toString()}&token=${encodeURIComponent(token)}`, { signal: AbortSignal.timeout(60000) }),
+      () => fetch(`http://localhost:8787/finmind?${qs.toString()}&token=${encodeURIComponent(token)}`, { signal: AbortSignal.timeout(60000) }),
     );
   }
-  const qDirect = new URLSearchParams(qs);
-  if (token) qDirect.set('token', token);
-  fetchers.push(async () => {
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    const r = await fetch(`${FINMIND_API}?${qDirect.toString()}`, { headers });
-    return r;
-  });
 
-  let lastErr = isCloudDeployed() && !token
-    ? 'FinMind 未設定：請在 Netlify 後台加環境變數 FINMIND_TOKEN，或至設定填入 Token'
-    : 'FinMind 連線失敗';
+  if (!isCloudDeployed()) {
+    const qDirect = new URLSearchParams(qs);
+    if (token) qDirect.set('token', token);
+    fetchers.push(async () => {
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      return fetch(`${FINMIND_API}?${qDirect.toString()}`, { headers, signal: AbortSignal.timeout(60000) });
+    });
+  }
+
+  let lastErr = isCloudDeployed() && !token && window._cloudFinMindValid === false
+    ? 'Netlify 雲端 FinMind Token 已失效。請至「設定」填入您的 FinMind Token。'
+    : isCloudDeployed() && !token
+      ? 'FinMind 未設定：請在 Netlify 後台加 FINMIND_TOKEN，或至設定填入 Token'
+      : 'FinMind 連線失敗';
   for (const f of fetchers) {
     try {
       const r = await f();
@@ -273,7 +342,9 @@ async function fetchFinMind(params) {
       }
       return json.data;
     } catch (e) {
-      lastErr = e.message || lastErr;
+      lastErr = e.name === 'TypeError' && /fetch/i.test(e.message)
+        ? (isCloudDeployed() ? '雲端 FinMind 代理連線失敗，請稍後再試' : e.message)
+        : (e.message || lastErr);
     }
   }
   throw new Error(lastErr);
@@ -292,54 +363,46 @@ function recentWeekdays(count) {
   return out;
 }
 
-function aggregateTaiexTicks(rows) {
-  if (!rows.length) return null;
-  const prices = rows.map(r => r.TAIEX).filter(v => v > 0);
-  if (!prices.length) return null;
-  const day = String(rows[0].date).slice(0, 10);
-  return {
-    date: day,
-    open: prices[0],
-    high: Math.max(...prices),
-    low: Math.min(...prices),
-    close: prices[prices.length - 1],
-    volume: 0,
-  };
-}
-
-async function fetchTaiexDay(date) {
-  const rows = await fetchFinMind({
-    dataset: 'TaiwanVariousIndicators5Seconds',
-    start_date: date,
-  });
-  return aggregateTaiexTicks(rows);
-}
-
 async function fetchTaiexDailyHistory(days = 90, onProgress) {
-  const cache = JSON.parse(localStorage.getItem(TAIEX_CACHE_KEY) || '{}');
-  const dates = recentWeekdays(days);
-  const missing = dates.filter(d => !cache[d]);
-  let done = dates.length - missing.length;
+  const endDate = new Date().toISOString().slice(0, 10);
+  const start = new Date();
+  start.setDate(start.getDate() - Math.ceil(days * 1.6));
+  const startDate = start.toISOString().slice(0, 10);
 
-  for (let i = 0; i < missing.length; i += 4) {
-    const batch = missing.slice(i, i + 4);
-    const results = await Promise.allSettled(batch.map(d => fetchTaiexDay(d)));
-    for (const res of results) {
-      if (res.status === 'rejected') {
-        const msg = res.reason?.message || '';
-        if (/FinMind Token|402|雲端\/手機版|upper limit/i.test(msg)) throw res.reason;
+  const finmindStrategies = [
+    { dataset: 'TaiwanStockPrice', data_id: 'TAIEX', label: 'TAIEX 日K' },
+    { dataset: 'TaiwanStockPrice', data_id: '001', label: '加權 001' },
+  ];
+
+  let lastErr = '加權指數日線不足';
+  for (const s of finmindStrategies) {
+    try {
+      if (onProgress) onProgress(1, 3);
+      const rows = await fetchFinMind({
+        dataset: s.dataset,
+        data_id: s.data_id,
+        start_date: startDate,
+        end_date: endDate,
+      });
+      const bars = finMindPriceRowsToDailyBars(rows).slice(-days);
+      if (bars.length >= Math.min(20, days)) {
+        if (onProgress) onProgress(3, 3);
+        return bars;
       }
+      lastErr = `${s.label} 僅 ${bars.length} 筆`;
+    } catch (e) {
+      lastErr = e.message || lastErr;
     }
-    results.forEach((res, idx) => {
-      if (res.status === 'fulfilled' && res.value) cache[batch[idx]] = res.value;
-    });
-    done += batch.length;
-    if (onProgress) onProgress(Math.min(done, days), days);
-    await new Promise(r => setTimeout(r, 120));
   }
 
-  localStorage.setItem(TAIEX_CACHE_KEY, JSON.stringify(cache));
-  return dates.map(d => cache[d]).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date));
+  try {
+    if (onProgress) onProgress(2, 3);
+    const bars = await fetchYahooTwiiDailyBars(days);
+    if (onProgress) onProgress(3, 3);
+    return bars.slice(-days);
+  } catch (e) {
+    throw new Error(`${lastErr} · ${e.message || 'Yahoo 備援失敗'}`);
+  }
 }
 
 async function fetchTaiexMarketVolDay(date) {
@@ -948,9 +1011,8 @@ async function fetchTaiexIndexHistorical(startDate, endDate) {
   } catch (_) { /* ignore */ }
 
   const strategies = [
-    { dataset: 'TaiwanStockPrice', data_id: '001', label: '加權指數001' },
-    { dataset: 'TaiwanStockTotalReturnIndex', data_id: 'TAIEX', label: 'TAIEX報酬指數' },
-    { dataset: 'TaiwanStockPrice', data_id: 'TAIEX', label: 'TAIEX' },
+    { dataset: 'TaiwanStockPrice', data_id: 'TAIEX', label: '加權 TAIEX' },
+    { dataset: 'TaiwanStockPrice', data_id: '001', label: '加權 001' },
   ];
 
   let lastErr = '台股加權歷史資料不足';
@@ -961,12 +1023,13 @@ async function fetchTaiexIndexHistorical(startDate, endDate) {
         45000,
         s.label,
       );
+      bars = bars.filter(b => isValidTaiexClose(b.close));
       if (bars.length < 100) {
-        bars = await withTimeout(
+        bars = (await withTimeout(
           fetchTaiexIndexByYear(s.dataset, s.data_id, startDate, endDate),
           90000,
           `${s.label}分批`,
-        );
+        )).filter(b => isValidTaiexClose(b.close));
       }
       if (bars.length >= 100) {
         try {
@@ -979,7 +1042,25 @@ async function fetchTaiexIndexHistorical(startDate, endDate) {
       lastErr = e.message || lastErr;
     }
   }
-  throw new Error(lastErr + '（請確認 FinMind Token）');
+
+  try {
+    const bars = await withTimeout(
+      fetchTwiiHistoricalByYear(startDate, endDate),
+      120000,
+      'Yahoo ^TWII',
+    );
+    if (bars.length >= 100) {
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({ bars, ts: Date.now(), source: 'Yahoo ^TWII' }));
+      } catch (_) {}
+      return bars;
+    }
+    lastErr = `Yahoo ^TWII 僅 ${bars.length} 筆`;
+  } catch (e) {
+    lastErr = e.message || lastErr;
+  }
+
+  throw new Error(lastErr + '（請至設定填入 FinMind Token，或稍後再試）');
 }
 
 function toggleFredSettings() {
@@ -2364,7 +2445,9 @@ function renderMarketOverview(markets) {
           ${m.tradeLabel || (m.trend === 'bull' ? '多頭' : m.trend === 'bear' ? '空頭' : '盤整')}
         </span>
         ${m.above21ma ? '<span class="signal-pill bull">MA21↑</span>' : '<span class="signal-pill bear">MA21↓</span>'}
+        ${m.isLive != null ? `<span class="signal-pill ${m.isLive ? 'bull' : 'sideways'}" style="font-size:9px;">${m.isLive ? '即時' : '日線'}</span>` : ''}
       </div>
+      ${m.source ? `<div style="font-size:9px;color:var(--muted);margin-top:4px;">● ${m.source}</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -2999,20 +3082,36 @@ async function fetchMarketOverviewItem(idx) {
       if (hist.length < 2) throw new Error('加權資料不足');
       const closes = hist.map(h => h.close);
       const mas = calcAllMA(closes);
-      const price = closes[closes.length - 1];
-      const prev = closes[closes.length - 2];
-      const change = price - prev;
+      let price = closes[closes.length - 1];
+      let prev = closes[closes.length - 2];
+      let change = price - prev;
+      let changePct = (change / prev) * 100;
+      let source = 'FinMind 日線';
+      let isLive = false;
+
+      try {
+        const rt = await fetchTwseRealtime('t00', 'index');
+        if (rt?.price > 0 && isValidTaiexClose(rt.price)) {
+          price = rt.price;
+          change = rt.change;
+          changePct = rt.changePct;
+          source = rt.sourceLabel || 'TWSE 即時';
+          isLive = true;
+        }
+      } catch (_) { /* 盤後或非交易時段用日線 */ }
+
       const bias = classifyTradeBias(price, mas);
       return {
         name: idx.name,
         price: price.toLocaleString(undefined, { maximumFractionDigits: 1 }),
         change,
-        changePct: (change / prev) * 100,
+        changePct,
         trend: determineTrend(price, mas),
         tradeLabel: bias.label,
         tradeTag: bias.tag,
         above21ma: mas.ma21 && price > mas.ma21,
-        source: 'FinMind',
+        source,
+        isLive,
       };
     }
     if (idx.fred) {
@@ -3293,6 +3392,10 @@ if (_urlParams.get('finmind_token') || _urlParams.get('fred_key')) {
 }
 
 async function bootDashboard() {
+  try {
+    localStorage.removeItem('finmind_taiex_daily_v3');
+    localStorage.removeItem('finmind_taiex_daily_v2');
+  } catch (_) {}
   renderSteps();
   if (document.getElementById('tradeLogBody')) renderTradeLog();
   if (document.getElementById('totalCapital')) calcKelly();
@@ -3329,7 +3432,7 @@ if ('serviceWorker' in navigator) {
     _swReloaded = true;
     location.reload();
   });
-  navigator.serviceWorker.register('sw.js?v=40').then((reg) => {
+  navigator.serviceWorker.register('sw.js?v=41').then((reg) => {
     reg.update();
     setInterval(() => reg.update(), 60 * 60 * 1000);
   }).catch(() => {});
