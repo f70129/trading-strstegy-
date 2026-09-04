@@ -102,14 +102,22 @@ function finMindPriceRowsToDailyBars(rows) {
 }
 
 async function fetchYahooTwiiDailyBars(days = 120) {
-  const range = days <= 30 ? '3mo' : days <= 90 ? '6mo' : '1y';
   const end = new Date().toISOString().slice(0, 10);
   const start = new Date(Date.now() - days * 86400000 * 1.6).toISOString().slice(0, 10);
-  const q = `symbol=${encodeURIComponent('^TWII')}&interval=1d&range=${range}`;
   let json;
   try {
-    json = await fetchYahooChartViaServer(q);
+    if (days > 180) {
+      const p1 = Math.floor(new Date(`${start}T12:00:00`).getTime() / 1000);
+      const p2 = Math.floor(new Date(`${end}T23:59:59`).getTime() / 1000);
+      const q = `symbol=${encodeURIComponent('^TWII')}&period1=${p1}&period2=${p2}`;
+      json = await fetchYahooChartViaServer(q);
+    } else {
+      const range = days <= 30 ? '3mo' : days <= 90 ? '6mo' : '1y';
+      const q = `symbol=${encodeURIComponent('^TWII')}&interval=1d&range=${range}`;
+      json = await fetchYahooChartViaServer(q);
+    }
   } catch (_) {
+    const range = days <= 30 ? '3mo' : days <= 90 ? '6mo' : days <= 180 ? '1y' : '2y';
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/%5ETWII?interval=1d&range=${range}`;
     json = await fetchViaProxy(url);
   }
@@ -368,12 +376,14 @@ async function fetchTaiexDailyHistory(days = 90, onProgress) {
   const start = new Date();
   start.setDate(start.getDate() - Math.ceil(days * 1.6));
   const startDate = start.toISOString().slice(0, 10);
+  const minBars = Math.min(days, Math.max(50, Math.floor(days * 0.55)));
 
   const finmindStrategies = [
     { dataset: 'TaiwanStockPrice', data_id: 'TAIEX', label: 'TAIEX 日K' },
     { dataset: 'TaiwanStockPrice', data_id: '001', label: '加權 001' },
   ];
 
+  let best = [];
   let lastErr = '加權指數日線不足';
   for (const s of finmindStrategies) {
     try {
@@ -385,11 +395,12 @@ async function fetchTaiexDailyHistory(days = 90, onProgress) {
         end_date: endDate,
       });
       const bars = finMindPriceRowsToDailyBars(rows).slice(-days);
-      if (bars.length >= Math.min(20, days)) {
+      if (bars.length > best.length) best = bars;
+      if (bars.length >= minBars) {
         if (onProgress) onProgress(3, 3);
         return bars;
       }
-      lastErr = `${s.label} 僅 ${bars.length} 筆`;
+      lastErr = `${s.label} 僅 ${bars.length} 筆（需 ≥${minBars}）`;
     } catch (e) {
       lastErr = e.message || lastErr;
     }
@@ -397,12 +408,17 @@ async function fetchTaiexDailyHistory(days = 90, onProgress) {
 
   try {
     if (onProgress) onProgress(2, 3);
-    const bars = await fetchYahooTwiiDailyBars(days);
+    const yahoo = (await fetchYahooTwiiDailyBars(days)).slice(-days);
+    if (yahoo.length > best.length) best = yahoo;
     if (onProgress) onProgress(3, 3);
-    return bars.slice(-days);
+    if (best.length >= minBars || best.length >= 30) return best;
+    lastErr = `Yahoo ^TWII 僅 ${best.length} 筆`;
   } catch (e) {
-    throw new Error(`${lastErr} · ${e.message || 'Yahoo 備援失敗'}`);
+    lastErr = `${lastErr} · ${e.message || 'Yahoo 備援失敗'}`;
   }
+
+  if (best.length >= 30) return best;
+  throw new Error(lastErr);
 }
 
 async function fetchTaiexMarketVolDay(date) {
@@ -514,8 +530,8 @@ async function fetchFinMindFutures(futuresId, startDate, endDate) {
 }
 
 async function fetchFinMindTaiexIndex(onProgress) {
-  const bars = await fetchTaiexDailyHistory(120, onProgress);
-  if (bars.length < 20) throw new Error('加權指數歷史資料不足');
+  const bars = await fetchTaiexDailyHistory(250, onProgress);
+  if (bars.length < 30) throw new Error('加權指數歷史資料不足');
   const volCache = await ensureTaiexVolumeCache(bars.map(b => b.date), onProgress);
   return finMindRowsToSeries(bars, b => ({
     date: b.date,
@@ -1985,14 +2001,15 @@ const ELLIOTT_WAVE_META = {
 };
 
 function detectElliottWave(closes, currentPrice, mas) {
-  if (closes.length < 50) return null;
+  if (!closes?.length || closes.length < 30) return null;
 
   const trend = determineTrend(currentPrice, mas);
   const bias = classifyTradeBias(currentPrice, mas);
   const bullish = bias.bias === 'long';
   const bearish = bias.bias === 'short';
 
-  const pivots = elliottBuildPivots(closes, Math.min(120, closes.length));
+  const lookback = Math.min(120, closes.length);
+  const pivots = elliottBuildPivots(closes, lookback);
   const recent = pivots.slice(-7);
   const infer = elliottInferWave(recent, currentPrice, !bearish);
 
@@ -2011,7 +2028,7 @@ function detectElliottWave(closes, currentPrice, mas) {
 
   const meta = ELLIOTT_WAVE_META[String(infer.wavePos)] || ELLIOTT_WAVE_META['?'];
   const pivotSummary = recent.length >= 2
-    ? `近 ${Math.min(120, closes.length)} 日 ${recent.length} 個轉折 · 末點 ${recent[recent.length - 1].type === 'high' ? '高' : '低'} ${recent[recent.length - 1].price.toLocaleString(undefined, { maximumFractionDigits: 1 })}`
+    ? `近 ${lookback} 日 ${recent.length} 個轉折 · 末點 ${recent[recent.length - 1].type === 'high' ? '高' : '低'} ${recent[recent.length - 1].price.toLocaleString(undefined, { maximumFractionDigits: 1 })}`
     : '轉折點不足';
 
   return {
@@ -3432,7 +3449,7 @@ if ('serviceWorker' in navigator) {
     _swReloaded = true;
     location.reload();
   });
-  navigator.serviceWorker.register('sw.js?v=41').then((reg) => {
+  navigator.serviceWorker.register('sw.js?v=42').then((reg) => {
     reg.update();
     setInterval(() => reg.update(), 60 * 60 * 1000);
   }).catch(() => {});
