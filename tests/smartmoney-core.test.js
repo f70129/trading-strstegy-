@@ -53,6 +53,21 @@ ok('累積量未變不產生成交', SM.snapshotToTrades(prev, Object.assign({},
   ok('時間格式 HHMMSSmmm', SM.parseFutOptTime('2026-09-07', '110759569').ms === ((11 * 60 + 7) * 60 + 59) * 1000 + 569);
 }
 
+// 備援逐筆 TaiwanFuturesTick 增量解析
+{
+  const rows = [
+    { date: '2026-09-07 08:45:00.100', futures_id: 'TX', contract_date: '202609', price: 47300, volume: 3 },
+    { date: '2026-09-07 08:45:01.200', futures_id: 'TX', contract_date: '202609', price: 47305, volume: 12 },
+    { date: '2026-09-07 08:45:02.000', futures_id: 'TX', contract_date: '202610', price: 47400, volume: 2 },
+    { date: '2026-09-07 08:45:03.000', futures_id: 'TX', contract_date: '202609', price: 47301, volume: 1 },
+  ];
+  const r1 = SM.parseFuturesTickRows(rows, 'TX', null);
+  ok('明細表解析：取近月、排除遠月，Tick Rule 定方向', r1.trades.length === 3 && r1.cursor.near === '202609' && r1.trades[1].side === 1 && r1.trades[2].side === -1);
+  const r2 = SM.parseFuturesTickRows(rows.concat([{ date: '2026-09-07 08:45:04.000', futures_id: 'TX', contract_date: '202609', price: 47310, volume: 20 }]), 'TX', r1.cursor);
+  ok('明細表解析：累加式只處理新增列', r2.trades.length === 1 && r2.trades[0].volume === 20 && r2.trades[0].side === 1);
+  ok('明細表解析：小台換算前歸類 MTX', SM.parseFuturesTickRows(rows, 'MTX', null).trades[0].product === 'MTX');
+}
+
 // 合成資料 → 回測
 const syn = SM.syntheticDay(7);
 const trades = SM.rowsToTrades(syn.rows);
@@ -89,6 +104,12 @@ for (const seed of [1, 2, 3, 7, 42, 99]) {
 }
 const days = [1, 2, 3].map(s => ({ date: 'd' + s, trades: SM.rowsToTrades(SM.syntheticDay(s).rows) }));
 const gg = SM.gridSearch(days, { bigLot: [5, 10], windowMin: [5, 10], zEntry: [1, 1.5], stopPts: [30], targetPts: [60] }, {});
+parity.futtick = SM.parseFuturesTickRows([
+  { date: '2026-09-07 08:45:00.100', futures_id: 'TX', contract_date: '202609', price: 47300, volume: 3 },
+  { date: '2026-09-07 08:45:01.200', futures_id: 'TX', contract_date: '202609', price: 47305, volume: 12 },
+  { date: '2026-09-07 08:45:02.000', futures_id: 'TX', contract_date: '202610', price: 47400, volume: 2 },
+  { date: '2026-09-07 08:45:03.000', futures_id: 'TX', contract_date: '202609', price: 47301, volume: 1 },
+], 'TX', null).trades;
 parity.futopt = SM.parseFutOptTickRows([
   { date: '2026-09-07', Time: '08:45:00.123', Close: [47300, 47301], Volume: [3, 12], TickType: 1 },
   { date: '2026-09-07', Time: '08:45:01.500', Close: '[47299]', Volume: '[2]', TickType: 2 },

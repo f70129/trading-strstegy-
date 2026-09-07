@@ -609,7 +609,7 @@ def parse_futopt_time(date_str, time_str, fallback_minute=0) -> dict:
 
 
 def _row_key(r: dict, i: int) -> str:
-    return f"{r.get('Time', r.get('time', ''))}|{i}"
+    return f"{r.get('Time', r.get('time', r.get('date', '')))}|{r.get('price', r.get('Close', ''))}|{i}"
 
 
 def parse_futopt_tick_rows(rows: list, product: str, cursor: Optional[dict], day_session_only=False, start="08:45", end="13:45") -> dict:
@@ -648,6 +648,45 @@ def parse_futopt_tick_rows(rows: list, product: str, cursor: Optional[dict], day
                 side = tick_side(price, c["lastPrice"], c["lastSide"])
             c["lastPrice"], c["lastSide"] = price, side
             trades.append({"ms": t["ms"], "minute": t["minute"], "product": prod, "price": price, "volume": volume, "side": side})
+    c["n"] = len(lst)
+    c["key"] = _row_key(lst[-1], len(lst) - 1) if lst else None
+    return {"trades": trades, "cursor": c}
+
+
+def parse_futures_tick_rows(rows: list, product: str, cursor: Optional[dict], day_session_only=False, start="08:45", end="13:45") -> dict:
+    """TaiwanFuturesTick（期貨交易明細表）增量解析，作為盤中逐筆備援；無 TickType → Tick Rule"""
+    c = {"n": 0, "key": None, "lastPrice": None, "lastSide": 0, "near": None}
+    c.update(cursor or {})
+    lst = rows if isinstance(rows, list) else []
+    prod = normalize_product(product)
+    start_min, end_min = hhmm_to_min(start), hhmm_to_min(end)
+    if not c["near"] or c["n"] < 200:
+        c["near"] = select_near_contract(lst)
+    frm = c["n"]
+    if len(lst) < c["n"] or (c["n"] > 0 and c["key"] is not None and _row_key(lst[c["n"] - 1] if c["n"] - 1 < len(lst) else {}, c["n"] - 1) != c["key"]):
+        frm = 0
+    if frm == 0:
+        c["lastPrice"], c["lastSide"] = None, 0
+        c["near"] = select_near_contract(lst)
+    trades = []
+    for i in range(frm, len(lst)):
+        r = lst[i]
+        cd = str(r.get("contract_date") or "")
+        if c["near"] and cd and cd != c["near"]:
+            continue
+        t = parse_tick_time(r.get("date"), 0)
+        if day_session_only and (t["minute"] < start_min or t["minute"] > end_min):
+            continue
+        try:
+            price = float(r.get("price"))
+        except (TypeError, ValueError):
+            continue
+        volume = float(r.get("volume") or 0)
+        if not math.isfinite(price) or volume <= 0:
+            continue
+        side = tick_side(price, c["lastPrice"], c["lastSide"])
+        c["lastPrice"], c["lastSide"] = price, side
+        trades.append({"ms": t["ms"], "minute": t["minute"], "product": prod, "price": price, "volume": volume, "side": side})
     c["n"] = len(lst)
     c["key"] = _row_key(lst[-1], len(lst) - 1) if lst else None
     return {"trades": trades, "cursor": c}
@@ -890,6 +929,7 @@ def cmd_live(args, params):
     tick_cursor: Dict[str, dict] = {}
     tick_ok: Dict[str, bool] = {}
     tick_logged: Dict[str, bool] = {}
+    tick_src: Dict[str, str] = {}
     use_ticks = not args.snapshot_only
     processed = -1
     last_mood = None
@@ -911,11 +951,20 @@ def cmd_live(args, params):
             for key, _ in products:
                 code = TICK_CODES[key]
                 try:
-                    rows = finmind("data", {"dataset": "TaiwanFutOptTick", "data_id": code, "start_date": day}, timeout=90, retries=1)
+                    rows = finmind("data", {"dataset": "TaiwanFutOptTick", "data_id": code}, timeout=90, retries=1)
+                    src = "TaiwanFutOptTick"
+                    if not rows:
+                        rows = finmind("data", {"dataset": "TaiwanFutOptTick", "data_id": code, "start_date": day}, timeout=90, retries=1)
+                    if not rows:  # 備援：期貨交易明細表
+                        rows = finmind("data", {"dataset": "TaiwanFuturesTick", "data_id": key, "start_date": day, "end_date": day}, timeout=180, retries=1)
+                        src = "TaiwanFuturesTick" if rows else src
+                    if tick_src.get(key) and tick_src[key] != src:
+                        tick_cursor[key] = None
+                    tick_src[key] = src
                     if rows and not tick_logged.get(key):
                         tick_logged[key] = True
-                        print(f"{key} 逐筆 {code} 首列原始：{json.dumps(rows[0], ensure_ascii=False)[:300]}；共 {len(rows)} 列")
-                    res = parse_futopt_tick_rows(rows, key, tick_cursor.get(key))
+                        print(f"{key} 逐筆來源 {src} 首列原始：{json.dumps(rows[0], ensure_ascii=False)[:300]}；共 {len(rows)} 列")
+                    res = (parse_futopt_tick_rows if src == "TaiwanFutOptTick" else parse_futures_tick_rows)(rows, key, tick_cursor.get(key))
                     tick_cursor[key] = res["cursor"]
                     if res["trades"]:
                         book.add_trades(res["trades"])
@@ -988,7 +1037,7 @@ def cmd_live(args, params):
             with open("data/smartmoney_live.json", "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False)
             ind = series[-1]
-            src = "逐筆" if tick_ok.get("TX") else "快照取樣"
+            src = tick_src.get("TX", "逐筆") if tick_ok.get("TX") else "快照取樣"
             print(f"[{now:%H:%M:%S}] [{src}] TX {quotes.get('TX', {}).get('price')} SMI {ind['smi']:+.2f} 大單淨 {book.totals['bigBuy'] - book.totals['bigSell']:+.0f} "
                   f"散戶淨 {book.totals['smallBuy'] - book.totals['smallSell']:+.1f} 心態 {mood['score']} {mood['label']} 模擬 {trader.equity:+.1f}")
         if args.once:
@@ -1029,6 +1078,16 @@ def cmd_selftest(_args, _params) -> int:
     ok("逐筆解析：累加式只處理新增列", len(r2["trades"]) == 1 and r2["trades"][0]["volume"] == 20 and r2["cursor"]["n"] == 4)
     ok("逐筆解析：列數變少重置", len(parse_futopt_tick_rows(fo_rows[:1], "TXFR1", r2["cursor"])["trades"]) == 2)
     ok("時間格式 HHMMSSmmm", parse_futopt_time("2026-09-07", "110759569")["ms"] == ((11 * 60 + 7) * 60 + 59) * 1000 + 569)
+    ft_rows = [
+        {"date": "2026-09-07 08:45:00.100", "futures_id": "TX", "contract_date": "202609", "price": 47300, "volume": 3},
+        {"date": "2026-09-07 08:45:01.200", "futures_id": "TX", "contract_date": "202609", "price": 47305, "volume": 12},
+        {"date": "2026-09-07 08:45:02.000", "futures_id": "TX", "contract_date": "202610", "price": 47400, "volume": 2},
+        {"date": "2026-09-07 08:45:03.000", "futures_id": "TX", "contract_date": "202609", "price": 47301, "volume": 1},
+    ]
+    fr1 = parse_futures_tick_rows(ft_rows, "TX", None)
+    ok("明細表解析：取近月 + Tick Rule", len(fr1["trades"]) == 3 and fr1["cursor"]["near"] == "202609" and fr1["trades"][1]["side"] == 1 and fr1["trades"][2]["side"] == -1)
+    fr2 = parse_futures_tick_rows(ft_rows + [{"date": "2026-09-07 08:45:04.000", "futures_id": "TX", "contract_date": "202609", "price": 47310, "volume": 20}], "TX", fr1["cursor"])
+    ok("明細表解析：累加式只處理新增列", len(fr2["trades"]) == 1 and fr2["trades"][0]["volume"] == 20)
     # 合成資料
     syn = synthetic_day(7)
     trades = rows_to_trades(syn["rows"])
@@ -1057,6 +1116,12 @@ def cmd_selftest(_args, _params) -> int:
                              "lastSmi": rr["series"][-1]["smi"], "totals": {k: js_round(v, 3) for k, v in FlowBookTotals(tr, {}).items()}}
     days = [{"date": f"d{s}", "trades": rows_to_trades(synthetic_day(s)["rows"])} for s in (1, 2, 3)]
     gg = grid_search(days, {"bigLot": [5, 10], "windowMin": [5, 10], "zEntry": [1, 1.5], "stopPts": [30], "targetPts": [60]}, {})
+    parity["futtick"] = parse_futures_tick_rows([
+        {"date": "2026-09-07 08:45:00.100", "futures_id": "TX", "contract_date": "202609", "price": 47300, "volume": 3},
+        {"date": "2026-09-07 08:45:01.200", "futures_id": "TX", "contract_date": "202609", "price": 47305, "volume": 12},
+        {"date": "2026-09-07 08:45:02.000", "futures_id": "TX", "contract_date": "202610", "price": 47400, "volume": 2},
+        {"date": "2026-09-07 08:45:03.000", "futures_id": "TX", "contract_date": "202609", "price": 47301, "volume": 1},
+    ], "TX", None)["trades"]
     parity["futopt"] = parse_futopt_tick_rows([
         {"date": "2026-09-07", "Time": "08:45:00.123", "Close": [47300, 47301], "Volume": [3, 12], "TickType": 1},
         {"date": "2026-09-07", "Time": "08:45:01.500", "Close": "[47299]", "Volume": "[2]", "TickType": 2},
