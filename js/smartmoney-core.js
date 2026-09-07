@@ -579,7 +579,7 @@
     }
     return parseTickTime(`${d} ${t}`, fallbackMinute);
   }
-  function rowKey(r, i) { return `${r.Time ?? r.time ?? ''}|${i}`; }
+  function rowKey(r, i) { return `${r.Time ?? r.time ?? r.date ?? ''}|${r.price ?? r.Close ?? ''}|${i}`; }
   function parseFutOptTickRows(rows, product, cursor, opts) {
     const o = Object.assign({ daySessionOnly: false, start: '08:45', end: '13:45' }, opts || {});
     const c = Object.assign({ n: 0, key: null, lastPrice: null, lastSide: 0 }, cursor || {});
@@ -609,6 +609,40 @@
         c.lastPrice = price; c.lastSide = side;
         trades.push({ ms: t.ms, minute: t.minute, product: prod, price, volume, side });
       }
+    }
+    c.n = list.length;
+    c.key = list.length ? rowKey(list[list.length - 1], list.length - 1) : null;
+    return { trades, cursor: c };
+  }
+
+  /**
+   * FinMind TaiwanFuturesTick（期貨交易明細表）增量解析，作為盤中逐筆的備援來源。
+   * 每列：{ date:'2026-09-07 11:50:29.123', futures_id:'TX', contract_date:'202609', price, volume }
+   * 無 TickType → 一律 Tick Rule。cursor 與 parseFutOptTickRows 相同語意。
+   */
+  function parseFuturesTickRows(rows, product, cursor, opts) {
+    const o = Object.assign({ daySessionOnly: false, start: '08:45', end: '13:45' }, opts || {});
+    const c = Object.assign({ n: 0, key: null, lastPrice: null, lastSide: 0, near: null }, cursor || {});
+    const list = Array.isArray(rows) ? rows : [];
+    const prod = normalizeProduct(product);
+    const startMin = hhmmToMin(o.start), endMin = hhmmToMin(o.end);
+    // 近月契約：資料量還小時每次重算，避免開盤初期樣本不足選錯
+    if (!c.near || c.n < 200) c.near = selectNearContract(list);
+    let from = c.n;
+    if (list.length < c.n || (c.n > 0 && c.key != null && rowKey(list[c.n - 1] || {}, c.n - 1) !== c.key)) from = 0;
+    if (from === 0) { c.lastPrice = null; c.lastSide = 0; c.near = selectNearContract(list); }
+    const trades = [];
+    for (let i = from; i < list.length; i++) {
+      const r = list[i];
+      const cd = String(r.contract_date || '');
+      if (c.near && cd && cd !== c.near) continue;
+      const t = parseTickTime(r.date, 0);
+      if (o.daySessionOnly && (t.minute < startMin || t.minute > endMin)) continue;
+      const price = Number(r.price), volume = Number(r.volume) || 0;
+      if (!Number.isFinite(price) || volume <= 0) continue;
+      const side = tickSide(price, c.lastPrice, c.lastSide);
+      c.lastPrice = price; c.lastSide = side;
+      trades.push({ ms: t.ms, minute: t.minute, product: prod, price, volume, side });
     }
     c.n = list.length;
     c.key = list.length ? rowKey(list[list.length - 1], list.length - 1) : null;
@@ -682,6 +716,6 @@
     mergeParams, hhmmToMin, minToHHMM, normalizeProduct, contractWeight, parseTickTime,
     selectNearContract, tickSide, classify, rowsToTrades, FlowBook, buildBars,
     computeSeries, sentiment, PaperTrader, backtestDay, backtestBars, gridSearch,
-    snapshotToTrades, intervalSide, parseFutOptTickRows, parseFutOptTime, toList, mulberry32, syntheticDay, round,
+    snapshotToTrades, intervalSide, parseFutOptTickRows, parseFuturesTickRows, parseFutOptTime, toList, mulberry32, syntheticDay, round,
   };
 });

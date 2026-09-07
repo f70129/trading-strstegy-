@@ -9,7 +9,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>台指期聰明錢看板 · 大單/小單即時流向</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/smartmoney-core.js?v=3"></script>
+<script src="js/smartmoney-core.js?v=5"></script>
 <style>
 :root {
   --bg:#0a0e1a; --panel:#111827; --panel2:#0f172a; --border:#1f2d40;
@@ -133,6 +133,7 @@ pre.log{background:#050810;border:1px solid var(--border);border-radius:8px;padd
       <button class="btn sm" id="btnStart">▶ 開始</button>
       <button class="btn sm outline" id="btnStop">■ 停止</button>
       <button class="btn sm outline" id="btnDemo">🎬 示範資料</button>
+      <button class="btn sm outline" id="btnDiag">🔍 逐筆診斷</button>
       <span class="hint" id="pollInfo"></span>
     </div>
   </div>
@@ -429,32 +430,40 @@ async function fetchJson(url, opt, ms) {
  * 成功過的路徑會被記住（sticky），避免每次輪詢都先撞失敗的路徑。
  */
 const routePref = {};
+const LARGE_DATASETS = ['TaiwanFutOptTick', 'TaiwanFuturesTick']; // 資料量大：Netlify 函式有 10 秒逾時 / 6MB 上限，必須直連
+let lastFinmindRoute = '';
 async function finmind(endpoint, params, ms) {
   const token = settings.token;
   const qs = new URLSearchParams(params);
+  const large = LARGE_DATASETS.includes(params.dataset);
   const attempts = [];
   const q = new URLSearchParams(qs); q.set('endpoint', endpoint); if (token) q.set('token', token);
-  const direct = { name: 'direct', fn: () => fetchJson(`${FINMIND}/${endpoint}?${qs}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} }, ms) };
+  const qd = new URLSearchParams(qs); if (token) qd.set('token', token); // 直連用 query token（避免 CORS preflight）
+  const direct = { name: 'direct', fn: () => fetchJson(`${FINMIND}/${endpoint}?${qd}`, {}, ms) };
   if (isCloud()) {
+    if (large) attempts.push(direct);
     attempts.push({ name: 'netlify', fn: () => fetchJson(`/.netlify/functions/finmind?${q}`, {}, ms) });
     attempts.push({ name: 'cf', fn: () => fetchJson(`/api/finmind?${q}`, {}, ms) });
-    attempts.push(direct);
+    if (!large) attempts.push(direct);
   } else {
     attempts.push(direct);
     for (const h of proxyHosts()) attempts.push({ name: 'proxy:' + h, fn: () => fetchJson(`http://${h}/finmind?${q}`, {}, ms) });
   }
-  const pref = routePref[endpoint];
+  const pref = large ? null : routePref[endpoint];
   if (pref) attempts.sort((a, b) => (a.name === pref ? -1 : 0) - (b.name === pref ? -1 : 0));
   let lastErr = 'FinMind 連線失敗';
+  const errs = [];
   for (const a of attempts) {
     try {
       const j = await a.fn();
-      if (j && (j.status === 200 || Array.isArray(j.data))) { routePref[endpoint] = a.name; return j; }
+      if (j && (j.status === 200 || Array.isArray(j.data))) { routePref[endpoint] = a.name; lastFinmindRoute = a.name; return j; }
       lastErr = j.msg || j.error || lastErr;
+      errs.push(`${a.name}: ${lastErr}`);
       if (/illegal|permission|sponsor|付費|權限/i.test(lastErr)) break;
-    } catch (e) { lastErr = e.message || lastErr; }
+    } catch (e) { lastErr = e.message || lastErr; errs.push(`${a.name}: ${lastErr}`); }
   }
-  throw new Error(lastErr);
+  if (large && isCloud() && !token) errs.push('逐筆資料必須由瀏覽器直連 FinMind，請在「設定」填入 Token（Netlify 環境變數的 Token 不能用在直連）');
+  throw new Error(errs.join('；') || lastErr);
 }
 async function sendTelegram(text) {
   const bot = settings.tgBot, chat = settings.tgChat;
@@ -494,7 +503,7 @@ const S = {
   date: null, book: null, trader: null, series: [], processedMinute: -1,
   snaps: {}, quotes: {}, signals: [], lastMood: null, lastSummaryMin: -1,
   demoTrades: null, demoIdx: 0, demoMinute: 0, lastSave: 0,
-  tickCursor: {}, tickOk: {}, tickCount: {}, tickTimer: null, tickRawLogged: {}, tickCodeMap: {},
+  tickCursor: {}, tickOk: {}, tickCount: {}, tickSrc: {}, tickTimer: null, tickRawLogged: {}, tickCodeMap: {},
 };
 function taipeiNow() {
   const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }); // YYYY-MM-DD HH:mm:ss
@@ -505,7 +514,7 @@ function inNightSession(min) { return min >= SM.hhmmToMin('15:00') || min <= SM.
 function resetDay(date) {
   S.date = date; S.book = new SM.FlowBook(settings.params); S.trader = new SM.PaperTrader(settings.params);
   S.series = []; S.processedMinute = -1; S.snaps = {}; S.signals = []; S.lastMood = null; S.lastSummaryMin = -1;
-  S.tickCursor = {}; S.tickOk = {}; S.tickCount = {};
+  S.tickCursor = {}; S.tickOk = {}; S.tickCount = {}; S.tickSrc = {};
   tgSent.clear();
 }
 function saveState() {
@@ -620,8 +629,8 @@ async function pollOnce() {
   }
   if (anyOk) {
     const tickN = Object.values(S.tickCount).reduce((a, b) => a + b, 0);
-    badge('bData', S.tickOk.TX ? `逐筆 ✓ ${fmt(tickN)} 筆 · 快照 ${S.quotes.TX?.time?.slice(11, 19) || ''}` : `快照 ✓ ${S.quotes.TX?.time?.slice(11, 19) || ''}（取樣）`, S.tickOk.TX ? 'ok' : 'warn');
-    if (settings.mode !== 'snapshot' && !S.tickOk.TX && S._tickErr) notice(`⚠️ 逐筆來源尚未取得（${S._tickErr}），目前只用快照取樣，大單統計會嚴重低估。請到「檢核」看 TaiwanFutOptTick 的回傳。`);
+    badge('bData', S.tickOk.TX ? `逐筆 ✓ ${fmt(tickN)} 筆 · ${S.tickSrc.TX === 'TaiwanFuturesTick' ? '明細表' : 'FutOptTick'} · 快照 ${S.quotes.TX?.time?.slice(11, 19) || ''}` : `快照 ✓ ${S.quotes.TX?.time?.slice(11, 19) || ''}（取樣）`, S.tickOk.TX ? 'ok' : 'warn');
+    if (settings.mode !== 'snapshot' && !S.tickOk.TX && S._tickErr) notice(`⚠️ <b>盤中逐筆尚未取得，目前只用快照取樣，大單統計會嚴重低估。</b><br>原因：${S._tickErr}<br>請把這個黃框截圖給開發者；或按「🔍 逐筆診斷」看原始回傳。`);
     else notice('');
     if (inDaySession(minute)) processBars(minute); else { S.series = SM.computeSeries(S.book.bars, settings.params); checkMood(); }
     render(); saveState();
@@ -633,7 +642,17 @@ async function pollOnce() {
   }
   if (errs.length && anyOk) log('部分商品失敗：' + errs.join('；'), 'WARN');
 }
-/** 盤中逐筆：dataset=TaiwanFutOptTick&data_id=TXFR1（回傳當日至今全部逐筆，含 TickType） */
+/** 盤中逐筆：dataset=TaiwanFutOptTick&data_id=TXFR1（回傳當日至今全部逐筆，含 TickType）
+ *  先不帶日期（官方套件用法），0 列再帶 start_date 重試。 */
+async function fetchFutOptTick(code, date) {
+  let j = await finmind('data', { dataset: 'TaiwanFutOptTick', data_id: code }, 90000);
+  if (!(j.data || []).length) j = await finmind('data', { dataset: 'TaiwanFutOptTick', data_id: code, start_date: date }, 90000);
+  return j;
+}
+/** 備援逐筆：TaiwanFuturesTick（期貨交易明細表，data_id = TX / MTX / TMF），無 TickType → Tick Rule */
+async function fetchFuturesTick(key, date) {
+  return finmind('data', { dataset: 'TaiwanFuturesTick', data_id: key, start_date: date, end_date: date }, 120000);
+}
 function tickCodeFor(pr) {
   if (S.tickCodeMap[pr.key]) return S.tickCodeMap[pr.key];
   const custom = (settings.tickCodes || '').split(',').map(x => x.trim()).filter(Boolean);
@@ -645,6 +664,7 @@ async function discoverTickCode(pr) {
     const j = await finmind('data', { dataset: 'TaiwanFutOptTickInfo' }, 20000);
     const codes = (j.data || []).map(r => String(r.code || r.futopt_id || '')).filter(Boolean);
     const cands = codes.filter(c => (c.startsWith(pr.snap[0]) || c.startsWith(pr.key) || (pr.snap[1] && c.startsWith(pr.snap[1]))) && !c.includes('/'));
+    S._tickCands = cands.slice(0, 12).join(', ') || `（總覽 ${codes.length} 筆，無台指代碼；前幾筆 ${codes.slice(0, 6).join(',')}）`;
     const pick = cands.find(c => /R1$/.test(c)) || cands.sort()[0];
     if (pick) { S.tickCodeMap[pr.key] = pick; log(`${pr.key} 逐筆代碼自動選用 ${pick}（候選 ${cands.slice(0, 6).join(',')}）`); return pick; }
     log(`${pr.key} 在 TaiwanFutOptTickInfo 找不到代碼；總覽共 ${codes.length} 筆，前幾筆：${codes.slice(0, 8).join(',')}`, 'WARN');
@@ -659,15 +679,29 @@ async function pollTicks() {
   for (const pr of PRODUCTS) {
     let code = tickCodeFor(pr);
     try {
-      let j = await finmind('data', { dataset: 'TaiwanFutOptTick', data_id: code, start_date: now.date }, 60000);
+      let j = await fetchFutOptTick(code, now.date);
       if (!(j.data || []).length && !S.tickCodeMap[pr.key]) {
         const alt = await discoverTickCode(pr);
-        if (alt && alt !== code) { code = alt; j = await finmind('data', { dataset: 'TaiwanFutOptTick', data_id: code, start_date: now.date }, 60000); }
+        if (alt && alt !== code) { code = alt; j = await fetchFutOptTick(code, now.date); }
       }
-      const rows = j.data || [];
-      if (!rows.length) { if (!S.tickRawLogged[pr.key + ':empty']) { S.tickRawLogged[pr.key + ':empty'] = 1; log(`${pr.key} 逐筆 ${code} 回傳 0 列`, 'WARN'); } continue; }
-      if (!S.tickRawLogged[pr.key]) { S.tickRawLogged[pr.key] = 1; log(`${pr.key} 逐筆 ${code} 首列原始：${JSON.stringify(rows[0]).slice(0, 300)}；共 ${rows.length} 列`); }
-      const res = SM.parseFutOptTickRows(rows, pr.key, S.tickCursor[pr.key]);
+      let rows = j.data || [], src = 'TaiwanFutOptTick';
+      if (!rows.length) { // 備援：期貨交易明細表
+        try {
+          const j2 = await fetchFuturesTick(pr.key, now.date);
+          if ((j2.data || []).length) { rows = j2.data; src = 'TaiwanFuturesTick'; }
+          else if (pr.key === 'TX') S._tickErr = `TaiwanFutOptTick ${code} 與 TaiwanFuturesTick ${pr.key} 都回傳 0 列（路徑 ${lastFinmindRoute}）${S._tickCands ? '；總覽可用代碼：' + S._tickCands : ''}`;
+        } catch (e2) { if (pr.key === 'TX') S._tickErr = `${code} 回傳 0 列；備援 TaiwanFuturesTick 失敗：${e2.message}`; }
+      }
+      if (!rows.length) {
+        if (!S.tickRawLogged[pr.key + ':empty']) { S.tickRawLogged[pr.key + ':empty'] = 1; log(`${pr.key} 逐筆 ${code} 回傳 0 列（路徑 ${lastFinmindRoute}，原始：${JSON.stringify(j).slice(0, 200)}）`, 'WARN'); }
+        continue;
+      }
+      if (!S.tickRawLogged[pr.key]) { S.tickRawLogged[pr.key] = 1; log(`${pr.key} 逐筆來源 ${src}（${src === 'TaiwanFutOptTick' ? code : pr.key}）首列原始：${JSON.stringify(rows[0]).slice(0, 300)}；共 ${rows.length} 列`); }
+      if (S.tickSrc[pr.key] && S.tickSrc[pr.key] !== src) { S.tickCursor[pr.key] = null; } // 來源切換 → 重置游標
+      S.tickSrc[pr.key] = src;
+      const res = src === 'TaiwanFutOptTick'
+        ? SM.parseFutOptTickRows(rows, pr.key, S.tickCursor[pr.key])
+        : SM.parseFuturesTickRows(rows, pr.key, S.tickCursor[pr.key]);
       S.tickCursor[pr.key] = res.cursor;
       if (res.trades.length) {
         S.book.addTrades(res.trades);
@@ -1099,6 +1133,36 @@ $('btnExport').addEventListener('click', () => {
 });
 $('btnTestTg').addEventListener('click', async () => { readForm(); saveSettings(); try { await sendTelegram(`🧪 台指期聰明錢看板測試訊息 ${new Date().toLocaleString('zh-TW')}`); badge('bTg', 'Telegram ✓', 'ok'); alert('Telegram 測試訊息已送出'); } catch (e) { badge('bTg', 'Telegram ✗', 'err'); alert('Telegram 失敗：' + e.message); } });
 $('btnCtx').addEventListener('click', () => { readForm(); saveSettings(); loadContext(); });
+$('btnDiag').addEventListener('click', async () => {
+  readForm(); saveSettings();
+  const lines = [`環境：${isCloud() ? '雲端部署' : location.protocol} · Token ${settings.token ? '已填（' + settings.token.length + ' 字）' : '未填'} · 模式 ${settings.mode}`];
+  notice('🔍 診斷中…（逐筆資料量大，可能需要 10–60 秒）');
+  for (const pr of PRODUCTS) {
+    const code = tickCodeFor(pr);
+    const t0 = performance.now();
+    try {
+      const j = await fetchFutOptTick(code, taipeiNow().date);
+      const rows = j.data || []; const res = SM.parseFutOptTickRows(rows, pr.key, null);
+      const big = res.trades.filter(t => SM.classify(t.product, t.volume, settings.params) === 'big').length;
+      lines.push(`${pr.label} ${code}：${rows.length} 列 → ${res.trades.length} 筆成交、大單 ${big} 筆，${Math.round(performance.now() - t0)} ms，路徑 ${lastFinmindRoute}${rows.length ? '<br>　首列 ' + escapeHtml(JSON.stringify(rows[0]).slice(0, 220)) : '<br>　原始回傳 ' + escapeHtml(JSON.stringify(j).slice(0, 220))}`);
+    } catch (e) { lines.push(`${pr.label} FutOptTick ${code}：❌ ${escapeHtml(e.message)}`); }
+    try {
+      const t1 = performance.now();
+      const j2 = await fetchFuturesTick(pr.key, taipeiNow().date);
+      const rows2 = j2.data || []; const res2 = SM.parseFuturesTickRows(rows2, pr.key, null);
+      const big2 = res2.trades.filter(t => SM.classify(t.product, t.volume, settings.params) === 'big').length;
+      lines.push(`${pr.label} 明細表 ${pr.key}：${rows2.length} 列 → ${res2.trades.length} 筆、大單 ${big2} 筆，${Math.round(performance.now() - t1)} ms${rows2.length ? '<br>　首列 ' + escapeHtml(JSON.stringify(rows2[0]).slice(0, 200)) : ''}`);
+    } catch (e) { lines.push(`${pr.label} 明細表 ${pr.key}：❌ ${escapeHtml(e.message)}`); }
+  }
+  try {
+    const j = await finmind('data', { dataset: 'TaiwanFutOptTickInfo' }, 20000);
+    const all = (j.data || []); const codes = all.map(r => String(r.code || r.futopt_id || '')).filter(c => /^(TXF|MXF|MTX|TMF)/.test(c) && !c.includes('/'));
+    lines.push(`TaiwanFutOptTickInfo：共 ${all.length} 筆；台指相關代碼 ${codes.slice(0, 20).join(', ') || '無'}${all.length ? '<br>　首筆 ' + escapeHtml(JSON.stringify(all[0]).slice(0, 200)) : ''}`);
+  } catch (e) { lines.push(`TaiwanFutOptTickInfo：❌ ${escapeHtml(e.message)}`); }
+  notice('🔍 <b>逐筆診斷結果（請整塊截圖）</b><br>' + lines.join('<br>'));
+  log('診斷：' + lines.join(' | ').replace(/<[^>]+>/g, ''));
+});
+function escapeHtml(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 $('btnBtRun').addEventListener('click', () => { readForm(); saveSettings(); runBacktest(); });
 $('btnBtGrid').addEventListener('click', () => { readForm(); saveSettings(); runGrid(); });
 $('btnCheck').addEventListener('click', runChecks);
