@@ -9,7 +9,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>台指期聰明錢看板 · 大單/小單即時流向</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/smartmoney-core.js?v=5"></script>
+<script src="js/smartmoney-core.js?v=6"></script>
 <style>
 :root {
   --bg:#0a0e1a; --panel:#111827; --panel2:#0f172a; --border:#1f2d40;
@@ -719,13 +719,20 @@ async function pollTicks() {
     if (inDaySession(minute)) processBars(Math.min(minute, now.minute)); else { S.series = SM.computeSeries(S.book.bars, settings.params); checkMood(); }
     render(); saveState();
   }
+  // 逐筆抓不到 TX（跑了 ≥2 輪仍無資料）→ 自動診斷一次，把真實回應印在畫面
+  S._tickPolls = (S._tickPolls || 0) + 1;
+  if (!S.tickOk.TX && S._tickPolls >= 2 && !S._autoDiagDone && inDaySession(now.minute)) {
+    S._autoDiagDone = true;
+    log('逐筆連續取不到資料，自動執行診斷…', 'WARN');
+    runTickDiag(false);
+  }
 }
 function startLive() {
   stopAll();
   S.demo = false;
   const now = taipeiNow();
   if (!restoreState() || S.date !== now.date) resetDay(now.date);
-  S.running = true;
+  S.running = true; S._autoDiagDone = false; S._tickPolls = 0;
   badge('bMode', '即時模式', 'info');
   $('pollInfo').textContent = `每 ${settings.pollSec} 秒輪詢 TXF / MXF / TMF 快照`;
   $('pollInfo').textContent = settings.mode === 'snapshot' ? `每 ${settings.pollSec} 秒輪詢快照（取樣模式）` : `逐筆每 ${settings.tickPollSec} 秒 · 報價快照每 ${settings.pollSec} 秒`;
@@ -1133,9 +1140,11 @@ $('btnExport').addEventListener('click', () => {
 });
 $('btnTestTg').addEventListener('click', async () => { readForm(); saveSettings(); try { await sendTelegram(`🧪 台指期聰明錢看板測試訊息 ${new Date().toLocaleString('zh-TW')}`); badge('bTg', 'Telegram ✓', 'ok'); alert('Telegram 測試訊息已送出'); } catch (e) { badge('bTg', 'Telegram ✗', 'err'); alert('Telegram 失敗：' + e.message); } });
 $('btnCtx').addEventListener('click', () => { readForm(); saveSettings(); loadContext(); });
-$('btnDiag').addEventListener('click', async () => {
-  readForm(); saveSettings();
-  const lines = [`環境：${isCloud() ? '雲端部署' : location.protocol} · Token ${settings.token ? '已填（' + settings.token.length + ' 字）' : '未填'} · 模式 ${settings.mode}`];
+$('btnDiag').addEventListener('click', () => runTickDiag(true));
+async function runTickDiag(fromButton) {
+  if (S._diagRunning) return; S._diagRunning = true;
+  if (fromButton) { readForm(); saveSettings(); }
+  const lines = [`環境：${isCloud() ? '雲端部署' : location.protocol} · Token ${settings.token ? '已填（' + settings.token.length + ' 字）' : '<b style="color:#ff4466">未填（直連需要頁面 Token）</b>'} · 模式 ${settings.mode} · 版本 ${SM.VERSION}`];
   notice('🔍 診斷中…（逐筆資料量大，可能需要 10–60 秒）');
   for (const pr of PRODUCTS) {
     const code = tickCodeFor(pr);
@@ -1159,9 +1168,10 @@ $('btnDiag').addEventListener('click', async () => {
     const all = (j.data || []); const codes = all.map(r => String(r.code || r.futopt_id || '')).filter(c => /^(TXF|MXF|MTX|TMF)/.test(c) && !c.includes('/'));
     lines.push(`TaiwanFutOptTickInfo：共 ${all.length} 筆；台指相關代碼 ${codes.slice(0, 20).join(', ') || '無'}${all.length ? '<br>　首筆 ' + escapeHtml(JSON.stringify(all[0]).slice(0, 200)) : ''}`);
   } catch (e) { lines.push(`TaiwanFutOptTickInfo：❌ ${escapeHtml(e.message)}`); }
-  notice('🔍 <b>逐筆診斷結果（請整塊截圖）</b><br>' + lines.join('<br>'));
+  notice('🔍 <b>逐筆診斷結果（請整塊截圖給開發者）</b><br>' + lines.join('<br>'));
   log('診斷：' + lines.join(' | ').replace(/<[^>]+>/g, ''));
-});
+  S._diagRunning = false;
+}
 function escapeHtml(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 $('btnBtRun').addEventListener('click', () => { readForm(); saveSettings(); runBacktest(); });
 $('btnBtGrid').addEventListener('click', () => { readForm(); saveSettings(); runGrid(); });
