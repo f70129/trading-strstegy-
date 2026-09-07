@@ -27,7 +27,7 @@ function cmp(pathStr, x, y) {
   if (x !== y) { diffs++; console.log(`❌ ${pathStr}: js=${JSON.stringify(x)} py=${JSON.stringify(y)}`); }
 }
 cmp('parity', a, b);
-for (const k of Object.keys(a)) if (k !== 'grid') console.log(`seed ${k}: 逐筆 ${a[k].nTrades} 筆，交易 ${a[k].trades} 筆，損益 ${a[k].pnlPts} 點，SMI ${a[k].lastSmi}  ${diffs ? '' : '✅ JS = Python'}`);
+for (const k of Object.keys(a)) if (k !== 'grid' && k !== 'futopt') console.log(`seed ${k}: 逐筆 ${a[k].nTrades} 筆，交易 ${a[k].trades} 筆，損益 ${a[k].pnlPts} 點，SMI ${a[k].lastSmi}  ${diffs ? '' : '✅ JS = Python'}`);
 console.log(`網格 ${a.grid.length} 組${diffs ? '' : ' ✅ 排名與損益一致'}`);
 console.log(diffs ? `\n❌ 共 ${diffs} 處不一致` : '\n✅ 跨語言一致性檢核通過：JS 與 Python 引擎結果完全相同');
 process.exit(diffs ? 1 : 0);

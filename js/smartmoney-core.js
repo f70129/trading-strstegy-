@@ -17,7 +17,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
 
   /** 契約規模換算為「大台等值口數」：大台 200 元/點、小台 50、微台 5 */
   const CONTRACT_WEIGHT = { TX: 1, MTX: 0.25, TMF: 0.025 };
@@ -550,6 +550,71 @@
     return 0;
   }
 
+  // ---------- FinMind 盤中逐筆（dataset=TaiwanFutOptTick，data_id 如 TXFR1）----------
+  /**
+   * 每列格式（依 FinMind 官方套件 docstring）：
+   *   { date:'2026-09-07', Time:'11:07:59.569', Close:[47376,47377] 或 47376, Volume:[1,5] 或 1, futopt_id:'TXFR1', TickType:1 }
+   * Close / Volume 可能是陣列、單值或 JSON 字串；TickType 可能是單值或陣列（1=外盤買 2=內盤賣 0=無法判定）。
+   * 每次輪詢會回傳當日至今全部逐筆 → 用 cursor 去重：{ n: 已處理列數, key: 最後一列的識別, lastPrice, lastSide }
+   * 回傳 { trades, cursor }。
+   */
+  function toList(v) {
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'string') {
+      const t = v.trim();
+      if (t.startsWith('[')) { try { const a = JSON.parse(t); if (Array.isArray(a)) return a; } catch (_) { /* fallthrough */ } }
+      if (t.includes(',')) return t.replace(/[\[\]]/g, '').split(',').map(x => Number(x.trim()));
+      return [Number(t)];
+    }
+    if (v == null) return [];
+    return [Number(v)];
+  }
+  function parseFutOptTime(dateStr, timeStr, fallbackMinute) {
+    const d = String(dateStr || '').slice(0, 10);
+    let t = String(timeStr == null ? '' : timeStr).trim();
+    if (!t && /\d{2}:\d{2}/.test(String(dateStr))) return parseTickTime(dateStr, fallbackMinute);
+    if (/^\d{5,9}$/.test(t)) { // HHMMSS 或 HHMMSSmmm（可能少前導 0）
+      t = t.padStart(t.length <= 6 ? 6 : 9, '0');
+      t = `${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}${t.length > 6 ? '.' + t.slice(6) : ''}`;
+    }
+    return parseTickTime(`${d} ${t}`, fallbackMinute);
+  }
+  function rowKey(r, i) { return `${r.Time ?? r.time ?? ''}|${i}`; }
+  function parseFutOptTickRows(rows, product, cursor, opts) {
+    const o = Object.assign({ daySessionOnly: false, start: '08:45', end: '13:45' }, opts || {});
+    const c = Object.assign({ n: 0, key: null, lastPrice: null, lastSide: 0 }, cursor || {});
+    const list = Array.isArray(rows) ? rows : [];
+    const prod = normalizeProduct(product);
+    const startMin = hhmmToMin(o.start), endMin = hhmmToMin(o.end);
+    // 去重：資料為累加式；若列數變少（換日 / 重置）則從頭處理
+    let from = c.n;
+    if (list.length < c.n || (c.n > 0 && c.key != null && rowKey(list[c.n - 1] || {}, c.n - 1) !== c.key)) from = 0;
+    if (from === 0) { c.lastPrice = null; c.lastSide = 0; }
+    const trades = [];
+    for (let i = from; i < list.length; i++) {
+      const r = list[i];
+      const closes = toList(r.Close ?? r.close ?? r.price ?? r.deal_price);
+      const vols = toList(r.Volume ?? r.volume ?? r.qty ?? r.deal_volume);
+      const tts = toList(r.TickType ?? r.tick_type ?? 0);
+      const t = parseFutOptTime(r.date, r.Time ?? r.time, 0);
+      if (o.daySessionOnly && (t.minute < startMin || t.minute > endMin)) continue;
+      const n = Math.max(closes.length, vols.length);
+      for (let k = 0; k < n; k++) {
+        const price = Number(closes[Math.min(k, closes.length - 1)]);
+        const volume = Number(vols[Math.min(k, vols.length - 1)]);
+        if (!Number.isFinite(price) || !(volume > 0)) continue;
+        const tt = Number(tts.length ? tts[Math.min(k, tts.length - 1)] : 0);
+        let side = tt === 1 ? 1 : tt === 2 ? -1 : 0;
+        if (!side) side = tickSide(price, c.lastPrice, c.lastSide);
+        c.lastPrice = price; c.lastSide = side;
+        trades.push({ ms: t.ms, minute: t.minute, product: prod, price, volume, side });
+      }
+    }
+    c.n = list.length;
+    c.key = list.length ? rowKey(list[list.length - 1], list.length - 1) : null;
+    return { trades, cursor: c };
+  }
+
   // ---------- 合成資料（測試 / 示範）----------
   /** mulberry32：與 Python 版完全相同的 32 位元 PRNG（跨語言一致性檢核用） */
   function mulberry32(seed) {
@@ -617,6 +682,6 @@
     mergeParams, hhmmToMin, minToHHMM, normalizeProduct, contractWeight, parseTickTime,
     selectNearContract, tickSide, classify, rowsToTrades, FlowBook, buildBars,
     computeSeries, sentiment, PaperTrader, backtestDay, backtestBars, gridSearch,
-    snapshotToTrades, intervalSide, mulberry32, syntheticDay, round,
+    snapshotToTrades, intervalSide, parseFutOptTickRows, parseFutOptTime, toList, mulberry32, syntheticDay, round,
   };
 });

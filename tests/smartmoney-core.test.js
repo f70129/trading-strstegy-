@@ -36,6 +36,23 @@ ok('累積量未變不產生成交', SM.snapshotToTrades(prev, Object.assign({},
   ok('FlowBook：取樣 5 口歸中單、未取樣 95 口不計入大小單', fb.totals.bigBuy === 0 && fb.totals.midBuy === 5 && fb.totals.smallBuy === 0 && fb.totals.unsBuy === 95 && fb.totals.trades === 1);
 }
 
+// 盤中逐筆 TaiwanFutOptTick 解析
+{
+  const rows = [
+    { date: '2026-09-07', Time: '08:45:00.123', Close: [47300, 47301], Volume: [3, 12], futopt_id: 'TXFR1', TickType: 1 },
+    { date: '2026-09-07', Time: '08:45:01.500', Close: '[47299]', Volume: '[2]', futopt_id: 'TXFR1', TickType: 2 },
+    { date: '2026-09-07', Time: '084502', Close: 47299, Volume: 1, futopt_id: 'TXFR1', TickType: 0 },
+  ];
+  const r1 = SM.parseFutOptTickRows(rows, 'TXFR1', null);
+  ok('逐筆解析：陣列 / 字串 / 單值三種格式共 4 筆', r1.trades.length === 4 && r1.trades[1].volume === 12 && r1.trades[1].side === 1 && r1.trades[2].side === -1);
+  ok('逐筆解析：TickType=0 用 Tick Rule（平盤沿用前一筆賣）', r1.trades[3].side === -1 && r1.trades[3].minute === 525 && r1.trades[3].ms === 31502000);
+  const r2 = SM.parseFutOptTickRows(rows.concat([{ date: '2026-09-07', Time: '08:45:03', Close: [47305], Volume: [20], TickType: 1 }]), 'TXFR1', r1.cursor);
+  ok('逐筆解析：累加式回傳只處理新增列', r2.trades.length === 1 && r2.trades[0].volume === 20 && r2.cursor.n === 4);
+  ok('逐筆解析：列數變少視為重置從頭處理', SM.parseFutOptTickRows(rows.slice(0, 1), 'TXFR1', r2.cursor).trades.length === 2);
+  ok('逐筆解析：MXFR1 歸類小台', SM.parseFutOptTickRows(rows, 'MXFR1', null).trades[0].product === 'MTX');
+  ok('時間格式 HHMMSSmmm', SM.parseFutOptTime('2026-09-07', '110759569').ms === ((11 * 60 + 7) * 60 + 59) * 1000 + 569);
+}
+
 // 合成資料 → 回測
 const syn = SM.syntheticDay(7);
 const trades = SM.rowsToTrades(syn.rows);
@@ -72,6 +89,11 @@ for (const seed of [1, 2, 3, 7, 42, 99]) {
 }
 const days = [1, 2, 3].map(s => ({ date: 'd' + s, trades: SM.rowsToTrades(SM.syntheticDay(s).rows) }));
 const gg = SM.gridSearch(days, { bigLot: [5, 10], windowMin: [5, 10], zEntry: [1, 1.5], stopPts: [30], targetPts: [60] }, {});
+parity.futopt = SM.parseFutOptTickRows([
+  { date: '2026-09-07', Time: '08:45:00.123', Close: [47300, 47301], Volume: [3, 12], TickType: 1 },
+  { date: '2026-09-07', Time: '08:45:01.500', Close: '[47299]', Volume: '[2]', TickType: 2 },
+  { date: '2026-09-07', Time: '084502', Close: 47299, Volume: 1, TickType: 0 },
+], 'TXFR1', null).trades;
 parity.grid = gg.map(x => ({ params: x.params, pnlPts: x.pnlPts, trades: x.trades, maxDD: x.maxDD }));
 const out = process.env.SM_PARITY_OUT || path.join(__dirname, '..', 'data', 'parity_js.json');
 fs.mkdirSync(path.dirname(out), { recursive: true });

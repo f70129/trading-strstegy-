@@ -9,7 +9,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>台指期聰明錢看板 · 大單/小單即時流向</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/smartmoney-core.js?v=1"></script>
+<script src="js/smartmoney-core.js?v=2"></script>
 <style>
 :root {
   --bg:#0a0e1a; --panel:#111827; --panel2:#0f172a; --border:#1f2d40;
@@ -161,7 +161,7 @@ pre.log{background:#050810;border:1px solid var(--border);border-radius:8px;padd
           <tr><td class="muted">未取樣量（快照模式）</td><td id="fUnB" class="muted">0</td><td id="fUnS" class="muted">0</td><td class="muted">—</td><td id="fCov" class="muted">—</td></tr>
         </tbody>
       </table></div>
-      <div class="note" id="flowNote">方向判定：快照 TickType（外盤=買 / 內盤=賣）→ 委買賣價 → Tick Rule；未取樣量以區間均價 vs 中價判向。<br>⚠️ 快照約 10 秒一筆、每筆只揭露「最後一筆成交」口數，大小單統計屬<b>取樣估計</b>；完整逐筆請用 WebSocket 模式或盤後逐筆回測。</div>
+      <div class="note" id="flowNote">流量來源：盤中逐筆 TaiwanFutOptTick（每筆成交口數 + TickType 外盤=買 / 內盤=賣，無則 Tick Rule）。若逐筆取不到才退回快照取樣，此時「未取樣量」會很大、大單統計嚴重低估。</div>
     </div>
   </div>
 
@@ -245,9 +245,11 @@ pre.log{background:#050810;border:1px solid var(--border);border-radius:8px;padd
     <label class="f">FinMind Token（付費 / sponsor 才能用即時快照與逐筆）</label>
     <input type="password" id="inToken" placeholder="貼上 FinMind API Token" autocomplete="off">
     <div class="fgrid">
-      <div><label class="f">即時模式</label><select id="inMode"><option value="snapshot">快照輪詢（taiwan_futures_snapshot，約 10 秒）</option><option value="ws">WebSocket 逐筆（實驗）+ 快照備援</option></select></div>
-      <div><label class="f">輪詢間隔（秒）</label><input type="number" id="inPoll" value="10" min="3" max="60"></div>
-      <div><label class="f">WS 近月契約代碼（留空自動）</label><input type="text" id="inWsCode" placeholder="例 TXFI6"></div>
+      <div><label class="f">成交流量來源</label><select id="inMode"><option value="ticks">盤中逐筆 TaiwanFutOptTick（完整逐筆，建議）</option><option value="snapshot">僅快照取樣（備援，大單幾乎抓不到）</option><option value="ws">WebSocket 逐筆（實驗）+ 逐筆輪詢備援</option></select></div>
+      <div><label class="f">報價快照間隔（秒）</label><input type="number" id="inPoll" value="5" min="2" max="60"></div>
+      <div><label class="f">逐筆輪詢間隔（秒）</label><input type="number" id="inTickPoll" value="15" min="5" max="120"></div>
+      <div><label class="f">逐筆代碼（留空 = TXFR1,MXFR1,TMFR1）</label><input type="text" id="inTickCodes" placeholder="例 TXFR1,MXFR1,TMFR1"></div>
+      <div><label class="f">WS 契約代碼（留空 = 同逐筆代碼）</label><input type="text" id="inWsCode" placeholder="例 TXFR1"></div>
       <div><label class="f">本機代理 host（file:// 用）</label><input type="text" id="inProxy" placeholder="127.0.0.1:8787"></div>
     </div>
   </div>
@@ -320,7 +322,12 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n, d = 0) => (n == null || !Number.isFinite(Number(n))) ? '—' : Number(n).toLocaleString('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: d });
 const signed = (n, d = 0) => (n > 0 ? '+' : '') + fmt(n, d);
 const cls = (n) => n > 0 ? 'up' : n < 0 ? 'down' : 'flat';
-const PRODUCTS = [{ key: 'TX', snap: 'TXF', label: '大台' }, { key: 'MTX', snap: 'MXF', label: '小台' }, { key: 'TMF', snap: 'TMF', label: '微台' }];
+// snap：快照 data_id 候選（依序嘗試）；tick：盤中逐筆 TaiwanFutOptTick 的近月代碼（R1 = 近月連續）
+const PRODUCTS = [
+  { key: 'TX', snap: ['TXF'], tick: 'TXFR1', label: '大台' },
+  { key: 'MTX', snap: ['MXF', 'MTX'], tick: 'MXFR1', label: '小台' },
+  { key: 'TMF', snap: ['TMF'], tick: 'TMFR1', label: '微台' },
+];
 const FINMIND = 'https://api.finmindtrade.com/api/v4';
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const LS_KEY = 'sm_settings_v1';
@@ -328,7 +335,7 @@ const LS_STATE = 'sm_state_v1';
 
 // ---------------- 設定 ----------------
 const DEFAULT_SETTINGS = {
-  token: '', mode: 'snapshot', pollSec: 10, wsCode: '', proxyHost: '',
+  token: '', mode: 'ticks', pollSec: 5, tickPollSec: 15, tickCodes: '', wsCode: '', proxyHost: '',
   tgBot: '', tgChat: '', tgEntry: true, tgExit: true, tgMood: true, tgSummary: false,
   params: Object.assign({}, SM.DEFAULT_PARAMS),
 };
@@ -351,6 +358,7 @@ function saveSettings() {
 function fillForm() {
   const p = settings.params;
   $('inToken').value = settings.token; $('inMode').value = settings.mode; $('inPoll').value = settings.pollSec;
+  $('inTickPoll').value = settings.tickPollSec; $('inTickCodes').value = settings.tickCodes;
   $('inWsCode').value = settings.wsCode; $('inProxy').value = settings.proxyHost;
   $('inTgBot').value = settings.tgBot; $('inTgChat').value = settings.tgChat;
   $('inTgEntry').checked = settings.tgEntry; $('inTgExit').checked = settings.tgExit; $('inTgMood').checked = settings.tgMood; $('inTgSummary').checked = settings.tgSummary;
@@ -361,7 +369,8 @@ function fillForm() {
 }
 function readForm() {
   const num = (id, d) => { const v = Number($(id).value); return Number.isFinite(v) ? v : d; };
-  settings.token = $('inToken').value.trim(); settings.mode = $('inMode').value; settings.pollSec = Math.max(3, num('inPoll', 10));
+  settings.token = $('inToken').value.trim(); settings.mode = $('inMode').value; settings.pollSec = Math.max(2, num('inPoll', 5));
+  settings.tickPollSec = Math.max(5, num('inTickPoll', 15)); settings.tickCodes = $('inTickCodes').value.trim().toUpperCase();
   settings.wsCode = $('inWsCode').value.trim().toUpperCase(); settings.proxyHost = $('inProxy').value.trim();
   settings.tgBot = $('inTgBot').value.trim(); settings.tgChat = $('inTgChat').value.trim();
   settings.tgEntry = $('inTgEntry').checked; settings.tgExit = $('inTgExit').checked; settings.tgMood = $('inTgMood').checked; settings.tgSummary = $('inTgSummary').checked;
@@ -477,6 +486,7 @@ const S = {
   date: null, book: null, trader: null, series: [], processedMinute: -1,
   snaps: {}, quotes: {}, signals: [], lastMood: null, lastSummaryMin: -1,
   demoTrades: null, demoIdx: 0, demoMinute: 0, lastSave: 0,
+  tickCursor: {}, tickOk: {}, tickCount: {}, tickTimer: null, tickRawLogged: {}, tickCodeMap: {},
 };
 function taipeiNow() {
   const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }); // YYYY-MM-DD HH:mm:ss
@@ -487,6 +497,7 @@ function inNightSession(min) { return min >= SM.hhmmToMin('15:00') || min <= SM.
 function resetDay(date) {
   S.date = date; S.book = new SM.FlowBook(settings.params); S.trader = new SM.PaperTrader(settings.params);
   S.series = []; S.processedMinute = -1; S.snaps = {}; S.signals = []; S.lastMood = null; S.lastSummaryMin = -1;
+  S.tickCursor = {}; S.tickOk = {}; S.tickCount = {};
   tgSent.clear();
 }
 function saveState() {
@@ -496,7 +507,7 @@ function saveState() {
     localStorage.setItem(LS_STATE, JSON.stringify({
       date: S.date, bars: S.book.bars, totals: S.book.totals, snaps: S.snaps, signals: S.signals.slice(-100),
       trader: { pos: S.trader.pos, trades: S.trader.trades, equity: S.trader.equity, peak: S.trader.peak, maxDD: S.trader.maxDD, dayTrades: S.trader.dayTrades, lastExitMinute: S.trader.lastExitMinute },
-      processedMinute: S.processedMinute, quotes: S.quotes,
+      processedMinute: S.processedMinute, quotes: S.quotes, tickCursor: S.tickCursor, tickCount: S.tickCount,
     }));
   } catch (_) {}
 }
@@ -507,6 +518,7 @@ function restoreState() {
     resetDay(st.date);
     S.book.bars = st.bars || []; S.book._byMinute = new Map(S.book.bars.map(b => [b.minute, b])); Object.assign(S.book.totals, st.totals || {});
     S.snaps = st.snaps || {}; S.signals = st.signals || []; S.processedMinute = st.processedMinute ?? -1; S.quotes = st.quotes || {};
+    S.tickCursor = st.tickCursor || {}; S.tickCount = st.tickCount || {};
     Object.assign(S.trader, st.trader || {});
     S.series = SM.computeSeries(S.book.bars, settings.params);
     log(`已還原今日狀態（${S.book.bars.length} 根 K，${S.trader.trades.length} 筆交易）`);
@@ -566,7 +578,9 @@ function processBars(currentMinute) {
 
 // ---------------- 快照輪詢 ----------------
 function pickNear(rows, prefix) {
-  const list = (rows || []).filter(r => String(r.futures_id || '').toUpperCase().startsWith(prefix) && !String(r.futures_id || '').includes('/'));
+  const prefixes = Array.isArray(prefix) ? prefix : [prefix];
+  if (prefixes.includes('MXF') || prefixes.includes('MTX')) { if (!prefixes.includes('MXF')) prefixes.push('MXF'); if (!prefixes.includes('MTX')) prefixes.push('MTX'); }
+  const list = (rows || []).filter(r => { const id = String(r.futures_id || '').toUpperCase(); return prefixes.some(p => id.startsWith(p)) && !id.includes('/'); });
   if (!list.length) return null;
   list.sort((a, b) => Number(b.total_volume || 0) - Number(a.total_volume || 0));
   return list[0];
@@ -577,22 +591,30 @@ async function pollOnce() {
   let minute = now.minute, anyOk = false, errs = [];
   for (const pr of PRODUCTS) {
     try {
-      const j = await finmind('taiwan_futures_snapshot', { data_id: pr.snap }, 12000);
-      const row = pickNear(j.data, pr.snap);
-      if (!row) { errs.push(`${pr.key}: 無資料`); continue; }
+      let row = null, lastErr = '';
+      for (const id of pr.snap) { // 小台快照代碼可能是 MXF 或 MTX，依序嘗試
+        try { const j = await finmind('taiwan_futures_snapshot', { data_id: id }, 12000); row = pickNear(j.data, pr.snap); if (row) break; }
+        catch (e) { lastErr = e.message; }
+      }
+      if (!row) { errs.push(`${pr.key}: ${lastErr || '無資料'}`); continue; }
       anyOk = true;
       const t = SM.parseTickTime(row.date, now.minute);
       if (pr.key === 'TX' && t.minute) minute = t.minute;
       const prev = S.snaps[pr.key];
-      const trades = SM.snapshotToTrades(prev, row, pr.key, { minute: t.minute || now.minute });
-      S.book.addTrades(trades);
+      // 逐筆來源正常時，流量全部來自逐筆；快照只更新報價，避免重複計算
+      if (!S.tickOk[pr.key]) {
+        const trades = SM.snapshotToTrades(prev, row, pr.key, { minute: t.minute || now.minute });
+        S.book.addTrades(trades);
+      }
       S.snaps[pr.key] = row;
       S.quotes[pr.key] = { price: Number(row.close), chg: Number(row.change_price), chgRate: Number(row.change_rate), tv: Number(row.total_volume), lastVol: Number(row.volume), tick: Number(row.TickType ?? row.tick_type), bid: Number(row.buy_price), ask: Number(row.sell_price), time: row.date, id: row.futures_id };
     } catch (e) { errs.push(`${pr.key}: ${e.message}`); }
   }
   if (anyOk) {
-    badge('bData', `FinMind 快照 ✓ ${S.quotes.TX?.time?.slice(11, 19) || ''}`, 'ok');
-    notice('');
+    const tickN = Object.values(S.tickCount).reduce((a, b) => a + b, 0);
+    badge('bData', S.tickOk.TX ? `逐筆 ✓ ${fmt(tickN)} 筆 · 快照 ${S.quotes.TX?.time?.slice(11, 19) || ''}` : `快照 ✓ ${S.quotes.TX?.time?.slice(11, 19) || ''}（取樣）`, S.tickOk.TX ? 'ok' : 'warn');
+    if (settings.mode !== 'snapshot' && !S.tickOk.TX && S._tickErr) notice(`⚠️ 逐筆來源尚未取得（${S._tickErr}），目前只用快照取樣，大單統計會嚴重低估。請到「檢核」看 TaiwanFutOptTick 的回傳。`);
+    else notice('');
     if (inDaySession(minute)) processBars(minute); else { S.series = SM.computeSeries(S.book.bars, settings.params); checkMood(); }
     render(); saveState();
   } else {
@@ -603,6 +625,59 @@ async function pollOnce() {
   }
   if (errs.length && anyOk) log('部分商品失敗：' + errs.join('；'), 'WARN');
 }
+/** 盤中逐筆：dataset=TaiwanFutOptTick&data_id=TXFR1（回傳當日至今全部逐筆，含 TickType） */
+function tickCodeFor(pr) {
+  if (S.tickCodeMap[pr.key]) return S.tickCodeMap[pr.key];
+  const custom = (settings.tickCodes || '').split(',').map(x => x.trim()).filter(Boolean);
+  const hit = custom.find(c => c.startsWith(pr.snap[0]) || c.startsWith(pr.key));
+  return hit || pr.tick;
+}
+async function discoverTickCode(pr) {
+  try {
+    const j = await finmind('data', { dataset: 'TaiwanFutOptTickInfo' }, 20000);
+    const codes = (j.data || []).map(r => String(r.code || r.futopt_id || '')).filter(Boolean);
+    const cands = codes.filter(c => (c.startsWith(pr.snap[0]) || c.startsWith(pr.key) || (pr.snap[1] && c.startsWith(pr.snap[1]))) && !c.includes('/'));
+    const pick = cands.find(c => /R1$/.test(c)) || cands.sort()[0];
+    if (pick) { S.tickCodeMap[pr.key] = pick; log(`${pr.key} 逐筆代碼自動選用 ${pick}（候選 ${cands.slice(0, 6).join(',')}）`); return pick; }
+    log(`${pr.key} 在 TaiwanFutOptTickInfo 找不到代碼；總覽共 ${codes.length} 筆，前幾筆：${codes.slice(0, 8).join(',')}`, 'WARN');
+  } catch (e) { log('TaiwanFutOptTickInfo 失敗：' + e.message, 'WARN'); }
+  return null;
+}
+async function pollTicks() {
+  if (settings.mode === 'snapshot' || !S.running || S.demo) return;
+  const now = taipeiNow();
+  if (S.date !== now.date) resetDay(now.date);
+  let minute = now.minute, any = false;
+  for (const pr of PRODUCTS) {
+    let code = tickCodeFor(pr);
+    try {
+      let j = await finmind('data', { dataset: 'TaiwanFutOptTick', data_id: code, start_date: now.date }, 60000);
+      if (!(j.data || []).length && !S.tickCodeMap[pr.key]) {
+        const alt = await discoverTickCode(pr);
+        if (alt && alt !== code) { code = alt; j = await finmind('data', { dataset: 'TaiwanFutOptTick', data_id: code, start_date: now.date }, 60000); }
+      }
+      const rows = j.data || [];
+      if (!rows.length) { if (!S.tickRawLogged[pr.key + ':empty']) { S.tickRawLogged[pr.key + ':empty'] = 1; log(`${pr.key} 逐筆 ${code} 回傳 0 列`, 'WARN'); } continue; }
+      if (!S.tickRawLogged[pr.key]) { S.tickRawLogged[pr.key] = 1; log(`${pr.key} 逐筆 ${code} 首列原始：${JSON.stringify(rows[0]).slice(0, 300)}；共 ${rows.length} 列`); }
+      const res = SM.parseFutOptTickRows(rows, pr.key, S.tickCursor[pr.key]);
+      S.tickCursor[pr.key] = res.cursor;
+      if (res.trades.length) {
+        S.book.addTrades(res.trades);
+        S.tickCount[pr.key] = (S.tickCount[pr.key] || 0) + res.trades.length;
+        const last = res.trades[res.trades.length - 1];
+        if (pr.key === 'TX') minute = Math.max(minute, last.minute);
+      }
+      S.tickOk[pr.key] = true; any = true;
+    } catch (e) {
+      S._tickErr = `${pr.key} ${code}: ${e.message}`;
+      if (!S.tickRawLogged[pr.key + ':err']) { S.tickRawLogged[pr.key + ':err'] = 1; log(`逐筆 ${code} 失敗：${e.message}`, 'ERR'); }
+    }
+  }
+  if (any) {
+    if (inDaySession(minute)) processBars(Math.min(minute, now.minute)); else { S.series = SM.computeSeries(S.book.bars, settings.params); checkMood(); }
+    render(); saveState();
+  }
+}
 function startLive() {
   stopAll();
   S.demo = false;
@@ -611,14 +686,17 @@ function startLive() {
   S.running = true;
   badge('bMode', '即時模式', 'info');
   $('pollInfo').textContent = `每 ${settings.pollSec} 秒輪詢 TXF / MXF / TMF 快照`;
-  pollOnce();
+  $('pollInfo').textContent = settings.mode === 'snapshot' ? `每 ${settings.pollSec} 秒輪詢快照（取樣模式）` : `逐筆每 ${settings.tickPollSec} 秒 · 報價快照每 ${settings.pollSec} 秒`;
+  pollTicks().then(pollOnce);
   S.timer = setInterval(pollOnce, settings.pollSec * 1000);
+  if (settings.mode !== 'snapshot') S.tickTimer = setInterval(pollTicks, settings.tickPollSec * 1000);
   if (settings.mode === 'ws') startWs();
   render();
 }
 function stopAll() {
   S.running = false;
   if (S.timer) clearInterval(S.timer); S.timer = null;
+  if (S.tickTimer) clearInterval(S.tickTimer); S.tickTimer = null;
   if (S.demoTimer) clearInterval(S.demoTimer); S.demoTimer = null;
   if (S.ws) { try { S.ws.close(); } catch (_) {} S.ws = null; }
   badge('bMode', '已停止', '');
@@ -627,6 +705,9 @@ function stopAll() {
 // ---------------- WebSocket 逐筆（實驗）----------------
 function nearMonthCode() {
   if (settings.wsCode) return settings.wsCode;
+  return tickCodeFor(PRODUCTS[0]);
+}
+function nearMonthCodeLegacy() {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
   let y = now.getFullYear(), m = now.getMonth();
   const first = new Date(y, m, 1); const wed = 1 + ((3 - first.getDay() + 7) % 7) + 14; // 第三個週三
@@ -955,8 +1036,22 @@ async function runChecks() {
     catch (e) { add({ name: 'FinMind Token 有效（免費資料集）', ok: false, msg: e.message }); }
     try { const j = await finmind('taiwan_futures_snapshot', { data_id: 'TXF' }, 15000); const row = pickNear(j.data, 'TXF'); add({ name: '即時快照權限 taiwan_futures_snapshot（付費）', ok: !!row, msg: row ? `${row.futures_id} ${row.date} 價 ${row.close} 量 ${row.total_volume} TickType=${row.TickType ?? row.tick_type ?? '無'}` : '回傳無資料（非交易時段可能為空）', warn: !row }); if (row) badge('bData', 'FinMind 快照 ✓', 'ok'); }
     catch (e) { add({ name: '即時快照權限 taiwan_futures_snapshot（付費）', ok: false, msg: e.message + '（需 FinMind sponsor / 付費方案）' }); }
-    try { const j = await finmind('taiwan_futures_snapshot', { data_id: 'MXF' }, 15000); const row = pickNear(j.data, 'MXF'); add({ name: '小台快照 MXF', ok: !!row, warn: !row, msg: row ? `${row.futures_id} 量 ${row.total_volume}` : '無資料（若持續為空，小台流量將缺失）' }); } catch (e) { add({ name: '小台快照 MXF', ok: false, warn: true, msg: e.message }); }
+    for (const id of ['MXF', 'MTX']) { try { const j = await finmind('taiwan_futures_snapshot', { data_id: id }, 15000); const row = pickNear(j.data, ['MXF', 'MTX']); add({ name: `小台快照 ${id}`, ok: !!row, warn: !row, msg: row ? `${row.futures_id} 量 ${row.total_volume}` : `無資料（回傳 ${(j.data || []).length} 列${(j.data || []).length ? '，首列 ' + JSON.stringify(j.data[0]).slice(0, 120) : ''}）` }); } catch (e) { add({ name: `小台快照 ${id}`, ok: false, warn: true, msg: e.message }); } }
     try { const j = await finmind('taiwan_futures_snapshot', { data_id: 'TMF' }, 15000); const row = pickNear(j.data, 'TMF'); add({ name: '微台快照 TMF', ok: !!row, warn: !row, msg: row ? `${row.futures_id} 量 ${row.total_volume}` : '無資料' }); } catch (e) { add({ name: '微台快照 TMF', ok: false, warn: true, msg: e.message }); }
+    for (const pr of PRODUCTS) {
+      const code = tickCodeFor(pr);
+      try {
+        const j = await finmind('data', { dataset: 'TaiwanFutOptTick', data_id: code, start_date: taipeiNow().date }, 60000);
+        const rows = j.data || []; const res = SM.parseFutOptTickRows(rows, pr.key, null);
+        const big = res.trades.filter(t => SM.classify(t.product, t.volume, settings.params) === 'big').length;
+        add({ name: `盤中逐筆 TaiwanFutOptTick ${code}（${pr.label}）`, ok: rows.length > 0, warn: !rows.length, msg: rows.length ? `${fmt(rows.length)} 列 → ${fmt(res.trades.length)} 筆成交，大單 ${big} 筆；首列 ${JSON.stringify(rows[0]).slice(0, 200)}` : '回傳 0 列（非交易時段可能為空；若盤中仍為 0，代碼可能不同，看下方總覽）' });
+      } catch (e) { add({ name: `盤中逐筆 TaiwanFutOptTick ${code}（${pr.label}）`, ok: false, msg: e.message }); }
+    }
+    try {
+      const j = await finmind('data', { dataset: 'TaiwanFutOptTickInfo' }, 20000);
+      const codes = (j.data || []).map(r => String(r.code || r.futopt_id || '')).filter(c => /^(TXF|MXF|MTX|TMF)/.test(c) && !c.includes('/'));
+      add({ name: 'TaiwanFutOptTickInfo 可用代碼（台指相關）', ok: codes.length > 0, warn: !codes.length, msg: codes.slice(0, 30).join(', ') || `總覽 ${(j.data || []).length} 筆，首筆 ${JSON.stringify((j.data || [])[0] || {}).slice(0, 160)}` });
+    } catch (e) { add({ name: 'TaiwanFutOptTickInfo', ok: false, warn: true, msg: e.message }); }
     try {
       const d = new Date(Date.now() - 864e5 * 3); while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
       const ds = ymd(d);
