@@ -13,6 +13,19 @@ python -m http.server 8080
 
 瀏覽器開啟：http://localhost:8080
 
+## ⚡ 聰明錢看板（大單 / 小單即時流向 · 順勢跟單模擬 · Telegram 通知）
+
+開 **`smartmoney.html`**（手機 / 桌機皆可）。以 FinMind **付費**快照 / 逐筆資料，把台指期成交依口數分成
+大戶（大台 ≥10 口）、中實戶、散戶（小台 / 微台 / 大台 1–2 口），計算今日大戶心態、SMI 聰明錢指數，
+順勢跟單模擬盤，訊號推播 Telegram；內建歷史逐筆回測與 108 組參數網格搜尋，以及一鍵「檢核」。
+完整說明、配比依據、檢核結果與限制見 **[SMARTMONEY.md](SMARTMONEY.md)**。
+
+```bash
+node tests/smartmoney-core.test.js          # 引擎單元測試
+python smartmoney_engine.py --selftest      # Python 引擎單元測試
+node tests/parity.js                        # JS ↔ Python 一致性檢核
+```
+
 ## 部署建議
 
 | 平台 | 台股 FinMind | 美股 FRED | 個股搜尋 |

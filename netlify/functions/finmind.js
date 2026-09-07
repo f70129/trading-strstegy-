@@ -44,12 +44,15 @@ exports.handler = async (event) => {
     }, cors);
   }
 
+  // endpoint：預設 data；付費即時快照可用 taiwan_futures_snapshot / taiwan_options_snapshot / taiwan_stock_tick_snapshot
+  const ALLOWED_ENDPOINTS = ['data', 'taiwan_futures_snapshot', 'taiwan_options_snapshot', 'taiwan_stock_tick_snapshot'];
+  const endpoint = ALLOWED_ENDPOINTS.includes(params.endpoint || 'data') ? (params.endpoint || 'data') : 'data';
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (k !== 'token') qs.set(k, v);
+    if (k !== 'token' && k !== 'endpoint') qs.set(k, v);
   }
 
-  const url = `https://api.finmindtrade.com/api/v4/data?${qs.toString()}`;
+  const url = `https://api.finmindtrade.com/api/v4/${endpoint}?${qs.toString()}`;
   try {
     let useToken = queryToken || envToken;
     let data = await callFinMind(url, useToken);

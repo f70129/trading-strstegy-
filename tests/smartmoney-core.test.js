@@ -1,0 +1,80 @@
+#!/usr/bin/env node
+/**
+ * js/smartmoney-core.js 單元測試（無需網路）
+ *   node tests/smartmoney-core.test.js
+ * 環境變數 SM_PARITY_OUT 指定跨語言比對輸出檔（預設 data/parity_js.json）
+ */
+const path = require('path');
+const fs = require('fs');
+const SM = require(path.join(__dirname, '..', 'js', 'smartmoney-core.js'));
+
+let fails = 0;
+const ok = (name, cond, extra) => { console.log((cond ? '✅' : '❌') + ' ' + name + (extra ? '  ' + extra : '')); if (!cond) fails++; };
+
+ok('分類：TX 10 口 = big', SM.classify('TX', 10) === 'big');
+ok('分類：TX 9 口 = mid / TX 1 口 = small / MTX = small', SM.classify('TX', 9) === 'mid' && SM.classify('TX', 1) === 'small' && SM.classify('MXF', 99) === 'small');
+ok('自訂門檻 bigLot=20 → TX 15 口 = mid', SM.classify('TX', 15, SM.mergeParams({ bigLot: 20 })) === 'mid');
+ok('契約權重', SM.contractWeight('MXF') === 0.25 && SM.contractWeight('TMFI6') === 0.025 && SM.contractWeight('TXF') === 1 && SM.contractWeight('ZZZ') === 0);
+ok('Tick Rule', SM.tickSide(101, 100, 0) === 1 && SM.tickSide(99, 100, 0) === -1 && SM.tickSide(100, 100, -1) === -1 && SM.tickSide(100, null, 0) === 0);
+const t = SM.parseTickTime('2026-09-07 08:45:30.500');
+ok('時間解析（含毫秒）', t.minute === 525 && t.ms === 31530500 && t.date === '2026-09-07');
+ok('時間解析（僅日期）', SM.parseTickTime('2026-09-07', 600).minute === 600);
+ok('近月契約排除價差', SM.selectNearContract([{ contract_date: '202609/202610', volume: 999 }, { contract_date: '202609', volume: 10 }, { contract_date: '202610', volume: 5 }]) === '202609');
+
+// 快照差量
+const prev = { close: 24000, total_volume: 1000, total_amount: 1000 * 24000 * 200 };
+const cur = { close: 24001, total_volume: 1100, volume: 5, TickType: 0, buy_price: 24000, sell_price: 24001, total_amount: prev.total_amount + 100 * 24000.9 * 200, date: '2026-09-07 09:00:10' };
+const st = SM.snapshotToTrades(prev, cur, 'TXF');
+ok('快照差量：取樣 5 口 + 未取樣 95 口(區間均價偏買)', st.length === 2 && st[0].volume === 5 && st[0].side === 1 && st[1].volume === 95 && st[1].side === 1 && st[1].forceSmall === true);
+ok('未取樣量區間均價偏賣 → -1', SM.snapshotToTrades(prev, Object.assign({}, cur, { total_amount: prev.total_amount + 100 * 24000.1 * 200 }), 'TXF')[1].side === -1);
+ok('TickType=2 → 內盤賣', SM.snapshotToTrades(prev, Object.assign({}, cur, { TickType: 2, total_amount: undefined }), 'TXF')[0].side === -1);
+ok('首次快照（無 prev）不產生成交', SM.snapshotToTrades(null, cur, 'TXF').length === 0);
+ok('累積量未變不產生成交', SM.snapshotToTrades(prev, Object.assign({}, cur, { total_volume: 1000 }), 'TXF').length === 0);
+{
+  const fb = new SM.FlowBook({});
+  fb.addTrades(st);
+  ok('FlowBook：取樣 5 口歸中單、未取樣 95 口不計入大小單', fb.totals.bigBuy === 0 && fb.totals.midBuy === 5 && fb.totals.smallBuy === 0 && fb.totals.unsBuy === 95 && fb.totals.trades === 1);
+}
+
+// 合成資料 → 回測
+const syn = SM.syntheticDay(7);
+const trades = SM.rowsToTrades(syn.rows);
+ok('合成逐筆數量與排序', trades.length > 5000 && trades.every((x, i) => i === 0 || x.ms >= trades[i - 1].ms), `${trades.length} 筆`);
+ok('夜盤過濾：daySessionOnly 排除 08:45 前 / 13:45 後', SM.rowsToTrades({ TX: [{ date: '2026-09-07 07:00:00', contract_date: '202609', price: 1, volume: 1 }, { date: '2026-09-07 09:00:00', contract_date: '202609', price: 1, volume: 1 }] }).length === 1);
+const r = SM.backtestDay(trades, {});
+ok('回測 bars/series', r.bars.length >= 290 && r.series.length === r.bars.length);
+let agree = 0, n = 0;
+r.series.forEach((s, i) => { if (syn.regime[i] && Math.abs(s.winBig) > 5) { n++; if (Math.sign(s.winBig) === syn.regime[i]) agree++; } });
+ok(`大單淨流與隱含趨勢一致率 ${(agree / n * 100).toFixed(0)}% (> 58%)`, agree / n > 0.58);
+ok('損益恆等式', Math.abs(r.trades.reduce((s, x) => s + x.pnl, 0) - r.stats.pnlPts) < 1e-6 && r.trades.every(x => Math.abs(((x.exit - x.entry) * x.side - 1.5) - x.pnl) < 1e-6));
+ok('停損虧損上限', r.trades.filter(x => x.reason === 'stop').every(x => x.pnl >= -(30 + 1.5) - 1e-6));
+ok('停利獲利 = 停利點數 − 成本', r.trades.filter(x => x.reason === 'target').every(x => Math.abs(x.pnl - (60 - 1.5)) < 1e-6));
+ok('每日交易次數 ≤ maxTradesPerDay', r.trades.length <= 6);
+ok('進場時間 < entryCutoff，且出場 ≤ flatAt', r.trades.every(x => SM.hhmmToMin(x.entryTime) < SM.hhmmToMin('13:00') && SM.hhmmToMin(x.exitTime) <= SM.hhmmToMin('13:40')));
+ok('趨勢濾網：多單進場價 ≥ VWAP', r.events.filter(e => e.type === 'entry').every(e => { const s = r.series.find(x => x.time === e.time); return e.side > 0 ? e.price >= s.vwap : e.price <= s.vwap; }));
+ok('關閉趨勢濾網 → 交易數不少於開啟時', SM.backtestDay(trades, { trendFilter: false }).trades.length >= r.trades.length);
+const g = SM.gridSearch([{ date: 'a', trades }], { bigLot: [10], windowMin: [10], zEntry: [1.5], stopPts: [30], targetPts: [60] }, {});
+ok('網格單組 = 單日回測', g.length === 1 && g[0].pnlPts === r.stats.pnlPts && g[0].trades === r.stats.trades);
+const fb = new SM.FlowBook({}); fb.addTrades(trades);
+const m = SM.sentiment(fb.totals);
+ok('大戶心態評分', m.score >= 0 && m.score <= 100 && m.label !== '樣本不足', JSON.stringify(m));
+ok('樣本不足判定', SM.sentiment({ bigBuy: 5, bigSell: 3 }).label === '樣本不足');
+ok('背離文字：大戶買散戶賣', SM.sentiment({ bigBuy: 80, bigSell: 20, smallBuy: 20, smallSell: 80 }).divergence.includes('偏多'));
+
+// 跨語言比對輸出
+const parity = {};
+for (const seed of [1, 2, 3, 7, 42, 99]) {
+  const tr = SM.rowsToTrades(SM.syntheticDay(seed).rows);
+  const rr = SM.backtestDay(tr, {});
+  const b = new SM.FlowBook({}); b.addTrades(tr);
+  const totals = {}; for (const [k, v] of Object.entries(b.totals)) totals[k] = SM.round(v, 3);
+  parity[String(seed)] = { trades: rr.stats.trades, pnlPts: rr.stats.pnlPts, nTrades: tr.length, lastSmi: rr.series[rr.series.length - 1].smi, totals };
+}
+const days = [1, 2, 3].map(s => ({ date: 'd' + s, trades: SM.rowsToTrades(SM.syntheticDay(s).rows) }));
+const gg = SM.gridSearch(days, { bigLot: [5, 10], windowMin: [5, 10], zEntry: [1, 1.5], stopPts: [30], targetPts: [60] }, {});
+parity.grid = gg.map(x => ({ params: x.params, pnlPts: x.pnlPts, trades: x.trades, maxDD: x.maxDD }));
+const out = process.env.SM_PARITY_OUT || path.join(__dirname, '..', 'data', 'parity_js.json');
+fs.mkdirSync(path.dirname(out), { recursive: true });
+fs.writeFileSync(out, JSON.stringify(parity, null, 1));
+console.log(`\n單元測試完成，失敗 ${fails} 項；跨語言比對輸出 ${out}`);
+process.exit(fails ? 1 : 0);

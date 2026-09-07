@@ -75,8 +75,10 @@ git push -u origin main
 
 | Key | Value |
 |-----|-------|
-| `FINMIND_TOKEN` | 你的 FinMind token |
+| `FINMIND_TOKEN` | 你的 FinMind token（聰明錢看板需付費 sponsor 方案） |
 | `FRED_API_KEY` | 你的 FRED key |
+| `TELEGRAM_BOT_TOKEN` | （選用）聰明錢看板 Telegram 推播 Bot Token |
+| `TELEGRAM_CHAT_ID` | （選用）Telegram Chat ID |
 
 3. **Save** → **Deploys** → **Trigger deploy**
 
