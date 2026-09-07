@@ -550,7 +550,31 @@
     return 0;
   }
 
-  // ---------- FinMind 盤中逐筆（dataset=TaiwanFutOptTick，data_id 如 TXFR1）----------
+  // ---------- 近月契約代碼（TAIFEX：A-L = 1-12 月，尾碼為西元年個位）----------
+  const MONTH_LETTERS = 'ABCDEFGHIJKL';
+  /** 期貨月碼：year 西元年、month0 為 0-11 → 例 (2026,8)=I6 */
+  function futuresMonthCode(year, month0) { return MONTH_LETTERS[month0] + String(year % 10); }
+  /**
+   * 近月契約代碼：prefix 為 TXF/MXF/TMF，date 為 Date（預設 now）。
+   * 結算日（第三個週三）14:00 後改用次月。例：2026-09-07 → TXFI6
+   */
+  function nearMonthContract(prefix, date) {
+    const d = date || new Date();
+    let y = d.getFullYear(), m = d.getMonth();
+    const first = new Date(y, m, 1);
+    const wed = 1 + ((3 - first.getDay() + 7) % 7) + 14; // 當月第三個週三的日期
+    const settled = d.getDate() > wed || (d.getDate() === wed && d.getHours() >= 14);
+    if (settled) { m++; if (m > 11) { m = 0; y++; } }
+    return prefix + futuresMonthCode(y, m);
+  }
+  /** 契約代碼排序鍵（依到期先後）：TXFI6 → 6*12+8 */
+  function contractExpiryKey(code) {
+    const m = String(code).match(/([A-L])(\d)$/);
+    if (!m) return 1e9;
+    return Number(m[2]) * 12 + MONTH_LETTERS.indexOf(m[1]);
+  }
+
+  // ---------- FinMind 盤中逐筆（dataset=TaiwanFutOptTick，data_id 如 TXFI6）----------
   /**
    * 每列格式（依 FinMind 官方套件 docstring）：
    *   { date:'2026-09-07', Time:'11:07:59.569', Close:[47376,47377] 或 47376, Volume:[1,5] 或 1, futopt_id:'TXFR1', TickType:1 }
@@ -716,6 +740,7 @@
     mergeParams, hhmmToMin, minToHHMM, normalizeProduct, contractWeight, parseTickTime,
     selectNearContract, tickSide, classify, rowsToTrades, FlowBook, buildBars,
     computeSeries, sentiment, PaperTrader, backtestDay, backtestBars, gridSearch,
-    snapshotToTrades, intervalSide, parseFutOptTickRows, parseFuturesTickRows, parseFutOptTime, toList, mulberry32, syntheticDay, round,
+    snapshotToTrades, intervalSide, parseFutOptTickRows, parseFuturesTickRows, parseFutOptTime, toList,
+    futuresMonthCode, nearMonthContract, contractExpiryKey, mulberry32, syntheticDay, round,
   };
 });

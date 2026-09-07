@@ -4,7 +4,7 @@
 （瀏覽器與 Node 共用的核心引擎）與 `smartmoney_engine.py`（Python 版，離線回測 / 常駐推播）。
 
 > 資料來源全部是 **FinMind 付費（sponsor）方案**：
-> - **盤中逐筆（主要流量來源）**：`dataset=TaiwanFutOptTick&data_id=TXFR1`（近月連續代碼 R1；小台 `MXFR1`、微台 `TMFR1`），
+> - **盤中逐筆（主要流量來源）**：`dataset=TaiwanFutOptTick&data_id=TXFI6`（近月契約碼，由日期自動推算：TAIFEX A-L=1-12月 + 西元年個位；小台 `MXF…`、微台 `TMF…`），
 >   回傳當日至今每筆成交的價格、口數與 `TickType`，看板每 15 秒輪詢一次並只處理新增列。
 > - 報價快照：`taiwan_futures_snapshot`（含最佳買賣價、累積量；只揭露最後一筆成交口數，**僅用來顯示報價**，
 >   逐筆取不到時才退回快照取樣）
@@ -112,7 +112,8 @@ SMI             = zBig − 0.5 × zRetail                   （散戶反向）
 **尚未實機驗證（開發環境網路被封鎖）：**
 1. `TaiwanFutOptTick` 盤中逐筆的列格式（`Close` / `Volume` 是陣列或單值、`Time` 格式）。解析器已同時支援陣列、
    單值、JSON 字串、`HH:MM:SS.fff` 與 `HHMMSSfff`；「檢核」與事件日誌會印出首列原始內容。
-2. 小台逐筆代碼是否為 `MXFR1`；若回傳 0 列，看板會查 `TaiwanFutOptTickInfo` 自動挑選，也可手動填。
+2. **（已由使用者實機確認 2026-09-07）逐筆代碼是近月契約碼 `TXFI6` 而非連續碼 `TXFR1`**：`R1` 只有快照端點吃，
+   逐筆端點必須用實際契約碼；看板已改為由日期自動推算近月碼，並用 `TaiwanFutOptTickInfo` 交叉驗證。
 3. WebSocket 逐筆的訊息格式與是否需要 token；看板會把第一筆原始訊息寫進「檢核 → 事件日誌」。
 4. 策略在真實資料上的績效 —— 合成資料只驗證邏輯正確，**不代表實盤期望值**。請先用 `--grid` 跑至少
    20 個交易日，且只挑「前 20 名中穩定出現、正報酬日 ≥ 60%」的參數區間。

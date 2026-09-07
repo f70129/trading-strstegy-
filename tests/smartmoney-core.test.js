@@ -68,6 +68,12 @@ ok('累積量未變不產生成交', SM.snapshotToTrades(prev, Object.assign({},
   ok('明細表解析：小台換算前歸類 MTX', SM.parseFuturesTickRows(rows, 'MTX', null).trades[0].product === 'MTX');
 }
 
+// 近月契約代碼
+ok('近月契約碼 2026-09-07 = TXFI6', SM.nearMonthContract('TXF', new Date(2026, 8, 7)) === 'TXFI6');
+ok('結算後改次月 2026-09-17 15:00 = TXFJ6', SM.nearMonthContract('TXF', new Date(2026, 8, 17, 15)) === 'TXFJ6');
+ok('12月結算後跨年 = MXFA7', SM.nearMonthContract('MXF', new Date(2026, 11, 20)) === 'MXFA7');
+ok('到期排序鍵遞增', SM.contractExpiryKey('TXFI6') < SM.contractExpiryKey('TXFJ6') && SM.contractExpiryKey('TXFJ6') < SM.contractExpiryKey('TXFC7'));
+
 // 合成資料 → 回測
 const syn = SM.syntheticDay(7);
 const trades = SM.rowsToTrades(syn.rows);

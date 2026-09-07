@@ -9,7 +9,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>台指期聰明錢看板 · 大單/小單即時流向</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/smartmoney-core.js?v=6"></script>
+<script src="js/smartmoney-core.js?v=7"></script>
 <style>
 :root {
   --bg:#0a0e1a; --panel:#111827; --panel2:#0f172a; --border:#1f2d40;
@@ -323,11 +323,11 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n, d = 0) => (n == null || !Number.isFinite(Number(n))) ? '—' : Number(n).toLocaleString('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: d });
 const signed = (n, d = 0) => (n > 0 ? '+' : '') + fmt(n, d);
 const cls = (n) => n > 0 ? 'up' : n < 0 ? 'down' : 'flat';
-// snap：快照 data_id 候選（依序嘗試）；tick：盤中逐筆 TaiwanFutOptTick 的近月代碼（R1 = 近月連續）
+// snap：快照 data_id 候選（依序嘗試）；prefix：逐筆契約代碼前綴（近月碼由日期推算，如 TXFI6）
 const PRODUCTS = [
-  { key: 'TX', snap: ['TXF'], tick: 'TXFR1', label: '大台' },
-  { key: 'MTX', snap: ['MXF', 'MTX'], tick: 'MXFR1', label: '小台' },
-  { key: 'TMF', snap: ['TMF'], tick: 'TMFR1', label: '微台' },
+  { key: 'TX', snap: ['TXF'], prefix: 'TXF', label: '大台' },
+  { key: 'MTX', snap: ['MXF', 'MTX'], prefix: 'MXF', label: '小台' },
+  { key: 'TMF', snap: ['TMF'], prefix: 'TMF', label: '微台' },
 ];
 const FINMIND = 'https://api.finmindtrade.com/api/v4';
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -653,19 +653,23 @@ async function fetchFutOptTick(code, date) {
 async function fetchFuturesTick(key, date) {
   return finmind('data', { dataset: 'TaiwanFuturesTick', data_id: key, start_date: date, end_date: date }, 120000);
 }
+function taipeiDate() { return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei' })); }
 function tickCodeFor(pr) {
   if (S.tickCodeMap[pr.key]) return S.tickCodeMap[pr.key];
   const custom = (settings.tickCodes || '').split(',').map(x => x.trim()).filter(Boolean);
-  const hit = custom.find(c => c.startsWith(pr.snap[0]) || c.startsWith(pr.key));
-  return hit || pr.tick;
+  const hit = custom.find(c => c.startsWith(pr.prefix) || c.startsWith(pr.key));
+  return hit || SM.nearMonthContract(pr.prefix, taipeiDate()); // 例：TXFI6
 }
 async function discoverTickCode(pr) {
   try {
     const j = await finmind('data', { dataset: 'TaiwanFutOptTickInfo' }, 20000);
     const codes = (j.data || []).map(r => String(r.code || r.futopt_id || '')).filter(Boolean);
-    const cands = codes.filter(c => (c.startsWith(pr.snap[0]) || c.startsWith(pr.key) || (pr.snap[1] && c.startsWith(pr.snap[1]))) && !c.includes('/'));
+    const cands = codes.filter(c => (c.startsWith(pr.prefix) || c.startsWith(pr.key) || (pr.snap[1] && c.startsWith(pr.snap[1]))) && /[A-L]\d$/.test(c) && !c.includes('/'));
     S._tickCands = cands.slice(0, 12).join(', ') || `（總覽 ${codes.length} 筆，無台指代碼；前幾筆 ${codes.slice(0, 6).join(',')}）`;
-    const pick = cands.find(c => /R1$/.test(c)) || cands.sort()[0];
+    const near = SM.nearMonthContract(pr.prefix, taipeiDate());
+    const nowKey = SM.contractExpiryKey(near);
+    const upcoming = cands.filter(c => SM.contractExpiryKey(c) >= nowKey).sort((a, b) => SM.contractExpiryKey(a) - SM.contractExpiryKey(b));
+    const pick = cands.includes(near) ? near : (upcoming[0] || cands.sort((a, b) => SM.contractExpiryKey(a) - SM.contractExpiryKey(b))[0]);
     if (pick) { S.tickCodeMap[pr.key] = pick; log(`${pr.key} 逐筆代碼自動選用 ${pick}（候選 ${cands.slice(0, 6).join(',')}）`); return pick; }
     log(`${pr.key} 在 TaiwanFutOptTickInfo 找不到代碼；總覽共 ${codes.length} 筆，前幾筆：${codes.slice(0, 8).join(',')}`, 'WARN');
   } catch (e) { log('TaiwanFutOptTickInfo 失敗：' + e.message, 'WARN'); }
@@ -754,8 +758,7 @@ function stopAll() {
 
 // ---------------- WebSocket 逐筆（實驗）----------------
 function nearMonthCode() {
-  if (settings.wsCode) return settings.wsCode;
-  return tickCodeFor(PRODUCTS[0]);
+  return settings.wsCode || tickCodeFor(PRODUCTS[0]);
 }
 function nearMonthCodeLegacy() {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));

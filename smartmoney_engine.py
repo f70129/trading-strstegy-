@@ -576,7 +576,38 @@ def snapshot_to_trades(prev: Optional[dict], snap: dict, product: str, minute: O
     return out
 
 
-# ---------------------------------------------------------------- FinMind 盤中逐筆（dataset=TaiwanFutOptTick, data_id=TXFR1）
+# ---------------------------------------------------------------- 近月契約代碼（TAIFEX A-L 月碼）
+MONTH_LETTERS = "ABCDEFGHIJKL"
+
+
+def futures_month_code(year: int, month0: int) -> str:
+    return MONTH_LETTERS[month0] + str(year % 10)
+
+
+def near_month_contract(prefix: str, date: Optional[datetime] = None) -> str:
+    d = date or datetime.now(TZ_TAIPEI)
+    y, m = d.year, d.month - 1
+    import calendar
+    first_wd = calendar.monthrange(y, m + 1)[0]  # 0=Mon
+    # 第三個週三日期
+    wed = 1 + ((2 - first_wd + 7) % 7) + 14
+    settled = d.day > wed or (d.day == wed and d.hour >= 14)
+    if settled:
+        m += 1
+        if m > 11:
+            m = 0
+            y += 1
+    return prefix + futures_month_code(y, m)
+
+
+def contract_expiry_key(code: str) -> int:
+    m = re.search(r"([A-L])(\d)$", str(code))
+    if not m:
+        return 10 ** 9
+    return int(m.group(2)) * 12 + MONTH_LETTERS.index(m.group(1))
+
+
+# ---------------------------------------------------------------- FinMind 盤中逐筆（dataset=TaiwanFutOptTick, data_id=TXFI6）
 def to_list(v) -> list:
     if isinstance(v, list):
         return v
@@ -918,7 +949,7 @@ def pick_near(rows: List[dict], prefix) -> Optional[dict]:
     return lst[0]
 
 
-TICK_CODES = {"TX": "TXFR1", "MTX": "MXFR1", "TMF": "TMFR1"}
+TICK_PREFIX = {"TX": "TXF", "MTX": "MXF", "TMF": "TMF"}
 
 
 def cmd_live(args, params):
@@ -949,7 +980,7 @@ def cmd_live(args, params):
         # 1) 盤中逐筆（完整成交 + TickType）
         if use_ticks:
             for key, _ in products:
-                code = TICK_CODES[key]
+                code = near_month_contract(TICK_PREFIX[key])
                 try:
                     rows = finmind("data", {"dataset": "TaiwanFutOptTick", "data_id": code}, timeout=90, retries=1)
                     src = "TaiwanFutOptTick"
@@ -1067,6 +1098,10 @@ def cmd_selftest(_args, _params) -> int:
     ok("快照差量：取樣 5 口 + 未取樣 95 口(區間均價偏買)", len(st) == 2 and st[0]["volume"] == 5 and st[0]["side"] == 1 and st[1]["volume"] == 95 and st[1]["side"] == 1 and st[1]["forceSmall"])
     cur2 = dict(cur, total_amount=prev["total_amount"] + 100 * 24000.1 * 200)
     ok("未取樣量區間均價偏賣 → -1", snapshot_to_trades(prev, cur2, "TXF")[1]["side"] == -1)
+    ok("近月契約碼 2026-09-07 = TXFI6", near_month_contract("TXF", datetime(2026, 9, 7)) == "TXFI6", near_month_contract("TXF", datetime(2026, 9, 7)))
+    ok("結算後改次月 2026-09-17 15:00 = TXFJ6", near_month_contract("TXF", datetime(2026, 9, 17, 15)) == "TXFJ6")
+    ok("12月結算後跨年 = MXFA7", near_month_contract("MXF", datetime(2026, 12, 20)) == "MXFA7")
+    ok("到期排序鍵遞增", contract_expiry_key("TXFI6") < contract_expiry_key("TXFJ6") < contract_expiry_key("TXFC7"))
     fo_rows = [
         {"date": "2026-09-07", "Time": "08:45:00.123", "Close": [47300, 47301], "Volume": [3, 12], "TickType": 1},
         {"date": "2026-09-07", "Time": "08:45:01.500", "Close": "[47299]", "Volume": "[2]", "TickType": 2},
