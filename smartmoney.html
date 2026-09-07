@@ -1,0 +1,1012 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0a0e1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="聰明錢看板">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>台指期聰明錢看板 · 大單/小單即時流向</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="js/smartmoney-core.js?v=1"></script>
+<style>
+:root {
+  --bg:#0a0e1a; --panel:#111827; --panel2:#0f172a; --border:#1f2d40;
+  --accent:#00d4ff; --green:#00ff88; --red:#ff4466; --gold:#ffd700;
+  --text:#e2e8f0; --muted:#7b8794; --nav-h:58px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans TC',sans-serif;font-size:14px}
+body{padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom))}
+a{color:var(--accent)}
+header{position:sticky;top:0;z-index:50;background:linear-gradient(135deg,#0a0e1a,#141a30);border-bottom:1px solid var(--accent);padding:8px 12px;padding-top:max(8px,env(safe-area-inset-top))}
+header h1{font-size:15px;color:var(--accent);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+header h1 small{font-size:11px;color:var(--muted);font-weight:normal}
+.badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.badge{font-size:10px;padding:3px 8px;border-radius:12px;border:1px solid var(--muted);color:var(--muted);white-space:nowrap}
+.badge.ok{color:var(--green);border-color:var(--green);background:rgba(0,255,136,.1)}
+.badge.err{color:var(--red);border-color:var(--red);background:rgba(255,68,102,.1)}
+.badge.warn{color:var(--gold);border-color:var(--gold);background:rgba(255,215,0,.1)}
+.badge.info{color:var(--accent);border-color:var(--accent);background:rgba(0,212,255,.1)}
+nav.tabs{display:flex;position:fixed;bottom:0;left:0;right:0;height:calc(var(--nav-h) + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);background:#0d1424;border-top:1px solid var(--border);z-index:60}
+nav.tabs button{flex:1;background:none;border:none;color:var(--muted);font-size:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer}
+nav.tabs button .ico{font-size:18px}
+nav.tabs button.active{color:var(--accent)}
+main{padding:10px 12px;max-width:1400px;margin:0 auto}
+.page{display:none}.page.active{display:block}
+.grid{display:grid;grid-template-columns:1fr;gap:10px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;min-width:0}
+.panel h2{font-size:11px;color:var(--accent);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+.panel h2 span.sub{color:var(--muted);letter-spacing:0;text-transform:none;font-weight:normal}
+.quotes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.q{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px}
+.q .name{font-size:11px;color:var(--muted)}
+.q .px{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.q .chg{font-size:11px}
+.q .meta{font-size:10px;color:var(--muted);margin-top:2px}
+.up{color:var(--green)}.down{color:var(--red)}.flat{color:var(--muted)}
+.gauge{margin:6px 0}
+.gauge .bar{height:14px;border-radius:7px;background:linear-gradient(90deg,var(--red),#555 50%,var(--green));position:relative}
+.gauge .needle{position:absolute;top:-4px;width:4px;height:22px;background:#fff;border-radius:2px;transform:translateX(-2px);box-shadow:0 0 6px #fff}
+.gauge .lbl{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:4px}
+.big{font-size:26px;font-weight:800}
+.verdict{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.verdict .lab{font-size:16px;font-weight:700}
+.verdict.bull .lab,.verdict.bull .big{color:var(--green)}
+.verdict.bear .lab,.verdict.bear .big{color:var(--red)}
+.verdict.neutral .lab,.verdict.neutral .big{color:var(--gold)}
+.note{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5}
+table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+th,td{padding:5px 6px;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap}
+th{color:var(--muted);font-weight:normal;font-size:11px}
+td:first-child,th:first-child{text-align:left}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.chart-box{position:relative;height:220px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+.kpi{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px}
+.kpi .k{font-size:10px;color:var(--muted)}
+.kpi .v{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.btn{background:var(--accent);color:#000;border:none;padding:10px 14px;border-radius:8px;font-weight:600;font-size:13px;min-height:40px;cursor:pointer}
+.btn.outline{background:transparent;border:1px solid var(--muted);color:var(--text)}
+.btn.danger{background:var(--red);color:#fff}
+.btn.sm{padding:6px 10px;min-height:32px;font-size:12px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+label.f{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px}
+input[type=text],input[type=password],input[type=number],input[type=date],select,textarea{width:100%;background:#0b1220;border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:8px;font-size:14px}
+input[type=checkbox]{width:18px;height:18px;vertical-align:middle}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px 12px}
+.sig{border-left:3px solid var(--muted);padding:6px 8px;margin-bottom:6px;background:var(--panel2);border-radius:0 6px 6px 0;font-size:12px}
+.sig.long{border-color:var(--green)}.sig.short{border-color:var(--red)}.sig.exit{border-color:var(--gold)}
+.sig .t{color:var(--muted);font-size:10px}
+.chk{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px}
+.chk .st{width:22px;flex:none;text-align:center}
+.chk .m{color:var(--muted);font-size:11px}
+pre.log{background:#050810;border:1px solid var(--border);border-radius:8px;padding:8px;font-size:11px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#9fb3c8}
+.pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--panel2);border:1px solid var(--border)}
+.muted{color:var(--muted)}
+.hint{font-size:11px;color:var(--muted);line-height:1.5}
+@media (min-width:900px){
+  body{padding-bottom:0}
+  nav.tabs{position:sticky;top:auto;bottom:auto;height:44px;border-top:none;border-bottom:1px solid var(--border);justify-content:flex-start;padding:0 12px}
+  nav.tabs button{flex:none;flex-direction:row;gap:6px;padding:0 16px;font-size:13px;border-bottom:2px solid transparent}
+  nav.tabs button.active{border-bottom-color:var(--accent)}
+  .grid.two{grid-template-columns:1fr 1fr}
+  .grid.three{grid-template-columns:1fr 1fr 1fr}
+  .chart-box{height:280px}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ 台指期聰明錢看板 <small>大單(大戶) / 小單(散戶) 即時流向 · 順勢跟單模擬</small><span id="clock" class="muted" style="font-size:12px;margin-left:auto"></span></h1>
+  <div class="badges">
+    <span id="bMode" class="badge">模式</span>
+    <span id="bData" class="badge">資料</span>
+    <span id="bProxy" class="badge">代理</span>
+    <span id="bTg" class="badge">Telegram</span>
+    <span id="bSession" class="badge">時段</span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button data-page="live" class="active"><span class="ico">📡</span>即時</button>
+  <button data-page="sim"><span class="ico">🧪</span>模擬</button>
+  <button data-page="bt"><span class="ico">📊</span>回測</button>
+  <button data-page="set"><span class="ico">⚙️</span>設定</button>
+  <button data-page="chk"><span class="ico">✅</span>檢核</button>
+</nav>
+
+<main>
+<!-- ================= 即時 ================= -->
+<section id="page-live" class="page active">
+  <div class="panel" id="noticeBox" style="display:none;border-color:var(--gold)"><div id="noticeText" class="note"></div></div>
+  <div class="panel">
+    <h2>即時報價 <span class="sub" id="quoteMeta">—</span></h2>
+    <div class="quotes">
+      <div class="q" id="q-TX"><div class="name">大台 TX</div><div class="px">—</div><div class="chg">—</div><div class="meta">—</div></div>
+      <div class="q" id="q-MTX"><div class="name">小台 MTX</div><div class="px">—</div><div class="chg">—</div><div class="meta">—</div></div>
+      <div class="q" id="q-TMF"><div class="name">微台 TMF</div><div class="px">—</div><div class="chg">—</div><div class="meta">—</div></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn sm" id="btnStart">▶ 開始</button>
+      <button class="btn sm outline" id="btnStop">■ 停止</button>
+      <button class="btn sm outline" id="btnDemo">🎬 示範資料</button>
+      <span class="hint" id="pollInfo"></span>
+    </div>
+  </div>
+
+  <div class="grid two">
+    <div class="panel">
+      <h2>今日大戶心態 <span class="sub">大單淨買比 60% + 散戶反向 20%</span></h2>
+      <div class="verdict neutral" id="verdict"><span class="big" id="vScore">—</span><span class="lab" id="vLabel">等待資料</span></div>
+      <div class="gauge"><div class="bar"><div class="needle" id="needle" style="left:50%"></div></div><div class="lbl"><span>0 強烈偏空</span><span>50 中性</span><span>強烈偏多 100</span></div></div>
+      <div class="note" id="vNote">—</div>
+      <div class="kpis" style="margin-top:8px">
+        <div class="kpi"><div class="k">SMI（聰明錢指數）</div><div class="v" id="kSmi">—</div></div>
+        <div class="kpi"><div class="k">大單淨流（窗）</div><div class="v" id="kWinBig">—</div></div>
+        <div class="kpi"><div class="k">散戶淨流（窗）</div><div class="v" id="kWinRet">—</div></div>
+        <div class="kpi"><div class="k">價格 vs VWAP</div><div class="v" id="kVwap">—</div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>大小單成交統計 <span class="sub">單位：大台等值口數（小台×0.25、微台×0.025）</span></h2>
+      <div class="tbl-wrap"><table id="flowTbl">
+        <thead><tr><th>類別</th><th>主動買</th><th>主動賣</th><th>淨額</th><th>筆數</th></tr></thead>
+        <tbody>
+          <tr><td>🐋 大單（大台 ≥<span id="bigLotLbl">10</span> 口）</td><td id="fBigB">0</td><td id="fBigS">0</td><td id="fBigN">0</td><td id="fBigT">0</td></tr>
+          <tr><td>🐬 中單（大台 <span id="midLotLbl">3–9</span> 口）</td><td id="fMidB">0</td><td id="fMidS">0</td><td id="fMidN">0</td><td>—</td></tr>
+          <tr><td>🐟 小單（散戶：小台/微台/大台1-2口）</td><td id="fSmB">0</td><td id="fSmS">0</td><td id="fSmN">0</td><td id="fSmT">0</td></tr>
+          <tr><td class="muted">未取樣量（快照模式）</td><td id="fUnB" class="muted">0</td><td id="fUnS" class="muted">0</td><td class="muted">—</td><td id="fCov" class="muted">—</td></tr>
+        </tbody>
+      </table></div>
+      <div class="note" id="flowNote">方向判定：快照 TickType（外盤=買 / 內盤=賣）→ 委買賣價 → Tick Rule；未取樣量以區間均價 vs 中價判向。<br>⚠️ 快照約 10 秒一筆、每筆只揭露「最後一筆成交」口數，大小單統計屬<b>取樣估計</b>；完整逐筆請用 WebSocket 模式或盤後逐筆回測。</div>
+    </div>
+  </div>
+
+  <div class="grid two">
+    <div class="panel"><h2>價格 / VWAP（1 分 K）</h2><div class="chart-box"><canvas id="chPrice"></canvas></div></div>
+    <div class="panel"><h2>大戶 vs 散戶 累計淨流 / SMI</h2><div class="chart-box"><canvas id="chFlow"></canvas></div></div>
+  </div>
+
+  <div class="grid two">
+    <div class="panel">
+      <h2>目前訊號 / 模擬部位</h2>
+      <div id="posBox" class="note">尚無部位</div>
+      <div id="lastSig" class="note" style="margin-top:6px">尚無訊號</div>
+    </div>
+    <div class="panel">
+      <h2>盤後籌碼底牌（FinMind 免費資料） <span class="sub" id="ctxMeta">—</span></h2>
+      <div class="tbl-wrap"><table id="ctxTbl"><thead><tr><th>項目</th><th>多方</th><th>空方</th><th>淨部位</th><th>日增減</th></tr></thead><tbody><tr><td colspan="5" class="muted">尚未載入（需 FinMind Token）</td></tr></tbody></table></div>
+      <div class="row" style="margin-top:6px"><button class="btn sm outline" id="btnCtx">載入外資期貨/大額交易人</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 模擬 ================= -->
+<section id="page-sim" class="page">
+  <div class="panel">
+    <h2>模擬盤績效（今日） <span class="sub">大台 1 點 = 200 元，已扣來回成本</span></h2>
+    <div class="kpis">
+      <div class="kpi"><div class="k">交易次數</div><div class="v" id="sTrades">0</div></div>
+      <div class="kpi"><div class="k">損益（點）</div><div class="v" id="sPnl">0</div></div>
+      <div class="kpi"><div class="k">損益（元）</div><div class="v" id="sNtd">0</div></div>
+      <div class="kpi"><div class="k">勝率</div><div class="v" id="sWin">—</div></div>
+      <div class="kpi"><div class="k">獲利因子</div><div class="v" id="sPf">—</div></div>
+      <div class="kpi"><div class="k">最大回撤</div><div class="v" id="sDd">0</div></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn sm outline" id="btnResetSim">重置今日模擬</button>
+      <button class="btn sm outline" id="btnExport">匯出 JSON</button>
+      <button class="btn sm outline" id="btnTestTg">📨 測試 Telegram</button>
+    </div>
+  </div>
+  <div class="grid two">
+    <div class="panel"><h2>訊號紀錄</h2><div id="sigList" class="hint">尚無訊號</div></div>
+    <div class="panel"><h2>成交明細</h2><div class="tbl-wrap"><table id="tradeTbl"><thead><tr><th>方向</th><th>進場</th><th>出場</th><th>時間</th><th>損益(點)</th><th>原因</th></tr></thead><tbody><tr><td colspan="6" class="muted">—</td></tr></tbody></table></div></div>
+  </div>
+</section>
+
+<!-- ================= 回測 ================= -->
+<section id="page-bt" class="page">
+  <div class="panel">
+    <h2>歷史逐筆回測 <span class="sub">FinMind TaiwanFuturesTick（付費）· 每日 TX/MTX/TMF 三筆請求，資料量大請用桌機</span></h2>
+    <div class="fgrid">
+      <div><label class="f">起始日</label><input type="date" id="btStart"></div>
+      <div><label class="f">結束日</label><input type="date" id="btEnd"></div>
+      <div><label class="f">資料來源</label><select id="btSource"><option value="finmind">FinMind 逐筆</option><option value="demo">示範合成資料</option></select></div>
+      <div><label class="f">示範天數</label><input type="number" id="btDemoDays" value="5" min="1" max="30"></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="btnBtRun">單組參數回測（用目前設定）</button>
+      <button class="btn outline" id="btnBtGrid">網格搜尋最佳參數</button>
+      <span class="hint" id="btStatus"></span>
+    </div>
+    <div class="hint" style="margin-top:6px">網格：大單門檻 {5,10,20} × 觀察窗 {5,10,15} × SMI 門檻 {1,1.5,2} × 停損 {20,30} × 停利 {40,60} = 108 組。</div>
+  </div>
+  <div class="panel" id="btResultPanel" style="display:none">
+    <h2>回測結果 <span class="sub" id="btMeta"></span></h2>
+    <div class="kpis" id="btKpis"></div>
+    <div class="chart-box" style="margin-top:8px"><canvas id="chEq"></canvas></div>
+    <div class="tbl-wrap" style="margin-top:8px"><table id="btTradeTbl"><thead><tr><th>日期</th><th>方向</th><th>進場</th><th>出場</th><th>時間</th><th>損益</th><th>原因</th></tr></thead><tbody></tbody></table></div>
+  </div>
+  <div class="panel" id="gridPanel" style="display:none">
+    <h2>網格搜尋排名（前 20） <span class="sub">依總損益 → 獲利因子 → 回撤</span></h2>
+    <div class="tbl-wrap"><table id="gridTbl"><thead><tr><th>#</th><th>大單</th><th>窗</th><th>SMI</th><th>停損</th><th>停利</th><th>損益(點)</th><th>次數</th><th>勝率</th><th>PF</th><th>回撤</th><th>正報酬日</th><th></th></tr></thead><tbody></tbody></table></div>
+    <div class="hint" style="margin-top:6px">⚠️ 網格最佳參數有過度配適風險：建議挑「前 20 名中穩定出現」的區間，而非單一最佳值；正報酬日比例 ≥ 60% 較可信。</div>
+  </div>
+</section>
+
+<!-- ================= 設定 ================= -->
+<section id="page-set" class="page">
+  <div class="panel">
+    <h2>資料來源</h2>
+    <label class="f">FinMind Token（付費 / sponsor 才能用即時快照與逐筆）</label>
+    <input type="password" id="inToken" placeholder="貼上 FinMind API Token" autocomplete="off">
+    <div class="fgrid">
+      <div><label class="f">即時模式</label><select id="inMode"><option value="snapshot">快照輪詢（taiwan_futures_snapshot，約 10 秒）</option><option value="ws">WebSocket 逐筆（實驗）+ 快照備援</option></select></div>
+      <div><label class="f">輪詢間隔（秒）</label><input type="number" id="inPoll" value="10" min="3" max="60"></div>
+      <div><label class="f">WS 近月契約代碼（留空自動）</label><input type="text" id="inWsCode" placeholder="例 TXFI6"></div>
+      <div><label class="f">本機代理 host（file:// 用）</label><input type="text" id="inProxy" placeholder="127.0.0.1:8787"></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Telegram 通知</h2>
+    <div class="fgrid">
+      <div><label class="f">Bot Token</label><input type="password" id="inTgBot" placeholder="123456:ABC..." autocomplete="off"></div>
+      <div><label class="f">Chat ID</label><input type="text" id="inTgChat" placeholder="例 123456789 或 -100xxxx"></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label><input type="checkbox" id="inTgEntry" checked> 進場訊號</label>
+      <label><input type="checkbox" id="inTgExit" checked> 出場訊號</label>
+      <label><input type="checkbox" id="inTgMood" checked> 大戶心態轉變</label>
+      <label><input type="checkbox" id="inTgSummary"> 每 30 分摘要</label>
+    </div>
+    <div class="hint" style="margin-top:6px">取得方式：Telegram 找 @BotFather 建立 bot 取得 Token；把 bot 加入對話後，開 https://api.telegram.org/bot&lt;Token&gt;/getUpdates 看 chat.id。也可在 Netlify 設 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 環境變數（此處留空即用雲端設定）。</div>
+  </div>
+  <div class="panel">
+    <h2>策略參數</h2>
+    <div class="fgrid">
+      <div><label class="f">大單門檻（大台口數 ≥）</label><input type="number" id="pBigLot" min="2" max="200"></div>
+      <div><label class="f">中單門檻（大台口數 ≥）</label><input type="number" id="pMidLot" min="2" max="100"></div>
+      <div><label class="f">觀察窗（分鐘）</label><input type="number" id="pWindow" min="1" max="60"></div>
+      <div><label class="f">SMI 進場門檻</label><input type="number" id="pZEntry" step="0.1" min="0.2" max="5"></div>
+      <div><label class="f">SMI 反向出場門檻</label><input type="number" id="pZExit" step="0.1" min="0" max="5"></div>
+      <div><label class="f">停損（點）</label><input type="number" id="pStop" min="5" max="300"></div>
+      <div><label class="f">停利（點）</label><input type="number" id="pTarget" min="5" max="500"></div>
+      <div><label class="f">散戶反向權重</label><input type="number" id="pRetailW" step="0.1" min="0" max="2"></div>
+      <div><label class="f">來回成本（點）</label><input type="number" id="pCost" step="0.1" min="0" max="10"></div>
+      <div><label class="f">冷卻（分鐘）</label><input type="number" id="pCooldown" min="0" max="60"></div>
+      <div><label class="f">每日最多交易次數</label><input type="number" id="pMaxTrades" min="1" max="50"></div>
+      <div><label class="f">最後進場時間</label><input type="text" id="pEntryCut" placeholder="13:00"></div>
+      <div><label class="f">強制平倉時間</label><input type="text" id="pFlatAt" placeholder="13:40"></div>
+      <div><label class="f">趨勢濾網（價格與 VWAP 同側）</label><select id="pTrend"><option value="1">開啟</option><option value="0">關閉</option></select></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="btnSave">💾 儲存設定</button>
+      <button class="btn outline" id="btnDefaults">恢復預設參數</button>
+      <span class="hint" id="saveMsg"></span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 檢核 ================= -->
+<section id="page-chk" class="page">
+  <div class="panel">
+    <h2>系統檢核 <span class="sub">引擎單元測試 + 連線 / 權限檢查</span></h2>
+    <div class="row"><button class="btn" id="btnCheck">▶ 執行檢核</button><span class="hint" id="chkStatus"></span></div>
+    <div id="chkList" style="margin-top:8px"></div>
+  </div>
+  <div class="panel">
+    <h2>方法說明</h2>
+    <div class="note">
+      <b>分類配比</b>：大台單筆 ≥ 大單門檻（預設 10 口，名目約 4,800 萬）→ 大戶；大台 3–9 口 → 中實戶；大台 1–2 口、小台、微台 → 散戶。流量統一換算為大台等值口數（小台 ×0.25、微台 ×0.025）。<br>
+      <b>方向</b>：即時快照用 TickType（外盤=主動買、內盤=主動賣），無則用最佳買賣價，再無則 Tick Rule；歷史逐筆一律 Tick Rule。<br>
+      <b>SMI</b> = z(大單淨流, 觀察窗) − 散戶權重 × z(散戶淨流, 觀察窗)。z 以「今日至今每分鐘淨流標準差 × √窗長」標準化。<br>
+      <b>訊號</b>：SMI ≥ 門檻且價格在 VWAP 之上 → 多；SMI ≤ −門檻且價格在 VWAP 之下 → 空。出場：停損 / 停利 / SMI 反向 / 13:40 強制平倉。<br>
+      <b>大戶心態分數</b> = 50 + 60 × 大單淨買比 − 20 × 散戶淨買比（散戶反向指標）。
+    </div>
+  </div>
+  <div class="panel"><h2>事件日誌</h2><pre class="log" id="logBox"></pre></div>
+</section>
+</main>
+
+<script>
+(function () {
+'use strict';
+const SM = window.SmartMoney;
+const $ = (id) => document.getElementById(id);
+const fmt = (n, d = 0) => (n == null || !Number.isFinite(Number(n))) ? '—' : Number(n).toLocaleString('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: d });
+const signed = (n, d = 0) => (n > 0 ? '+' : '') + fmt(n, d);
+const cls = (n) => n > 0 ? 'up' : n < 0 ? 'down' : 'flat';
+const PRODUCTS = [{ key: 'TX', snap: 'TXF', label: '大台' }, { key: 'MTX', snap: 'MXF', label: '小台' }, { key: 'TMF', snap: 'TMF', label: '微台' }];
+const FINMIND = 'https://api.finmindtrade.com/api/v4';
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const LS_KEY = 'sm_settings_v1';
+const LS_STATE = 'sm_state_v1';
+
+// ---------------- 設定 ----------------
+const DEFAULT_SETTINGS = {
+  token: '', mode: 'snapshot', pollSec: 10, wsCode: '', proxyHost: '',
+  tgBot: '', tgChat: '', tgEntry: true, tgExit: true, tgMood: true, tgSummary: false,
+  params: Object.assign({}, SM.DEFAULT_PARAMS),
+};
+let settings = loadSettings();
+function loadSettings() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (_) {}
+  const merged = Object.assign({}, DEFAULT_SETTINGS, s);
+  merged.params = Object.assign({}, SM.DEFAULT_PARAMS, s.params || {});
+  if (!merged.token) { try { merged.token = localStorage.getItem('finmindToken') || ''; } catch (_) {} }
+  if (!merged.proxyHost) { try { merged.proxyHost = localStorage.getItem('proxyHost') || ''; } catch (_) {} }
+  return merged;
+}
+function saveSettings() {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(settings));
+    if (settings.token) localStorage.setItem('finmindToken', settings.token);
+  } catch (_) {}
+}
+function fillForm() {
+  const p = settings.params;
+  $('inToken').value = settings.token; $('inMode').value = settings.mode; $('inPoll').value = settings.pollSec;
+  $('inWsCode').value = settings.wsCode; $('inProxy').value = settings.proxyHost;
+  $('inTgBot').value = settings.tgBot; $('inTgChat').value = settings.tgChat;
+  $('inTgEntry').checked = settings.tgEntry; $('inTgExit').checked = settings.tgExit; $('inTgMood').checked = settings.tgMood; $('inTgSummary').checked = settings.tgSummary;
+  $('pBigLot').value = p.bigLot; $('pMidLot').value = p.midLot; $('pWindow').value = p.windowMin; $('pZEntry').value = p.zEntry; $('pZExit').value = p.zExit;
+  $('pStop').value = p.stopPts; $('pTarget').value = p.targetPts; $('pRetailW').value = p.retailWeight; $('pCost').value = p.costPts;
+  $('pCooldown').value = p.cooldownMin; $('pMaxTrades').value = p.maxTradesPerDay; $('pEntryCut').value = p.entryCutoff; $('pFlatAt').value = p.flatAt; $('pTrend').value = p.trendFilter ? '1' : '0';
+  $('bigLotLbl').textContent = p.bigLot; $('midLotLbl').textContent = `${p.midLot}–${p.bigLot - 1}`;
+}
+function readForm() {
+  const num = (id, d) => { const v = Number($(id).value); return Number.isFinite(v) ? v : d; };
+  settings.token = $('inToken').value.trim(); settings.mode = $('inMode').value; settings.pollSec = Math.max(3, num('inPoll', 10));
+  settings.wsCode = $('inWsCode').value.trim().toUpperCase(); settings.proxyHost = $('inProxy').value.trim();
+  settings.tgBot = $('inTgBot').value.trim(); settings.tgChat = $('inTgChat').value.trim();
+  settings.tgEntry = $('inTgEntry').checked; settings.tgExit = $('inTgExit').checked; settings.tgMood = $('inTgMood').checked; settings.tgSummary = $('inTgSummary').checked;
+  const p = settings.params;
+  p.bigLot = num('pBigLot', 10); p.midLot = Math.min(num('pMidLot', 3), p.bigLot - 1); p.windowMin = num('pWindow', 10); p.zEntry = num('pZEntry', 1.5); p.zExit = num('pZExit', 0);
+  p.stopPts = num('pStop', 30); p.targetPts = num('pTarget', 60); p.retailWeight = num('pRetailW', 0.5); p.costPts = num('pCost', 1.5);
+  p.cooldownMin = num('pCooldown', 5); p.maxTradesPerDay = num('pMaxTrades', 6);
+  p.entryCutoff = /^\d{2}:\d{2}$/.test($('pEntryCut').value) ? $('pEntryCut').value : '13:00';
+  p.flatAt = /^\d{2}:\d{2}$/.test($('pFlatAt').value) ? $('pFlatAt').value : '13:40';
+  p.trendFilter = $('pTrend').value === '1';
+}
+
+// ---------------- 日誌 / 狀態 ----------------
+const logs = [];
+function log(msg, level) {
+  const t = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+  logs.push(`[${t}] ${level ? level + ' ' : ''}${msg}`);
+  if (logs.length > 300) logs.shift();
+  const el = $('logBox'); if (el) { el.textContent = logs.slice(-120).join('\n'); el.scrollTop = el.scrollHeight; }
+  if (level === 'ERR') console.warn(msg); else console.log(msg);
+}
+function badge(id, text, kind) { const el = $(id); el.textContent = text; el.className = 'badge' + (kind ? ' ' + kind : ''); }
+function notice(text) { $('noticeBox').style.display = text ? 'block' : 'none'; $('noticeText').innerHTML = text || ''; }
+
+// ---------------- 網路：FinMind / Telegram ----------------
+function isCloud() {
+  if (location.protocol === 'file:') return false;
+  const h = location.hostname;
+  return !(['localhost', '127.0.0.1'].includes(h) || /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h));
+}
+function proxyHosts() {
+  const custom = (settings.proxyHost || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  const list = [];
+  if (custom) list.push(custom);
+  if (!list.includes('127.0.0.1:8787')) list.push('127.0.0.1:8787');
+  return list;
+}
+async function fetchJson(url, opt, ms) {
+  const r = await fetch(url, Object.assign({ signal: AbortSignal.timeout(ms || 20000) }, opt || {}));
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok && !j.status) j.error = j.error || `HTTP ${r.status}`;
+  return j;
+}
+/**
+ * endpoint: 'data' | 'taiwan_futures_snapshot'；params: {dataset,data_id,start_date,...}
+ * 路徑順序：雲端部署 → Netlify/Cloudflare 函式（Token 可放環境變數）→ 直連；
+ *           本機 / file:// → 直連 FinMind（允許 CORS）→ 本機代理 8787。
+ * 成功過的路徑會被記住（sticky），避免每次輪詢都先撞失敗的路徑。
+ */
+const routePref = {};
+async function finmind(endpoint, params, ms) {
+  const token = settings.token;
+  const qs = new URLSearchParams(params);
+  const attempts = [];
+  const q = new URLSearchParams(qs); q.set('endpoint', endpoint); if (token) q.set('token', token);
+  const direct = { name: 'direct', fn: () => fetchJson(`${FINMIND}/${endpoint}?${qs}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} }, ms) };
+  if (isCloud()) {
+    attempts.push({ name: 'netlify', fn: () => fetchJson(`/.netlify/functions/finmind?${q}`, {}, ms) });
+    attempts.push({ name: 'cf', fn: () => fetchJson(`/api/finmind?${q}`, {}, ms) });
+    attempts.push(direct);
+  } else {
+    attempts.push(direct);
+    for (const h of proxyHosts()) attempts.push({ name: 'proxy:' + h, fn: () => fetchJson(`http://${h}/finmind?${q}`, {}, ms) });
+  }
+  const pref = routePref[endpoint];
+  if (pref) attempts.sort((a, b) => (a.name === pref ? -1 : 0) - (b.name === pref ? -1 : 0));
+  let lastErr = 'FinMind 連線失敗';
+  for (const a of attempts) {
+    try {
+      const j = await a.fn();
+      if (j && (j.status === 200 || Array.isArray(j.data))) { routePref[endpoint] = a.name; return j; }
+      lastErr = j.msg || j.error || lastErr;
+      if (/illegal|permission|sponsor|付費|權限/i.test(lastErr)) break;
+    } catch (e) { lastErr = e.message || lastErr; }
+  }
+  throw new Error(lastErr);
+}
+async function sendTelegram(text) {
+  const bot = settings.tgBot, chat = settings.tgChat;
+  const attempts = [];
+  if (bot && chat) {
+    attempts.push(() => fetchJson(`https://api.telegram.org/bot${bot}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chat, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+    }, 15000));
+  }
+  const body = JSON.stringify({ bot, chat, text });
+  if (isCloud()) {
+    attempts.push(() => fetchJson('/.netlify/functions/telegram', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, 15000));
+    attempts.push(() => fetchJson('/api/telegram', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, 15000));
+  } else if (bot && chat) {
+    for (const h of proxyHosts()) attempts.push(() => fetchJson(`http://${h}/telegram`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }, 15000));
+  }
+  if (!attempts.length) throw new Error('未設定 Telegram Bot / Chat ID');
+  let lastErr = 'Telegram 傳送失敗';
+  for (const a of attempts) {
+    try { const j = await a(); if (j && j.ok) return j; lastErr = j.description || j.error || lastErr; } catch (e) { lastErr = e.message || lastErr; }
+  }
+  throw new Error(lastErr);
+}
+const tgSent = new Set();
+async function notify(key, text) {
+  if (tgSent.has(key)) return;
+  tgSent.add(key);
+  if (!settings.tgBot && !isCloud()) { log('Telegram 未設定，略過通知：' + key); return; }
+  try { await sendTelegram(text); badge('bTg', 'Telegram ✓ 已推播', 'ok'); log('Telegram 已送出：' + key); }
+  catch (e) { badge('bTg', 'Telegram ✗ ' + e.message, 'err'); log('Telegram 失敗：' + e.message, 'ERR'); }
+}
+
+// ---------------- 即時狀態 ----------------
+const S = {
+  running: false, demo: false, timer: null, ws: null, wsOk: false,
+  date: null, book: null, trader: null, series: [], processedMinute: -1,
+  snaps: {}, quotes: {}, signals: [], lastMood: null, lastSummaryMin: -1,
+  demoTrades: null, demoIdx: 0, demoMinute: 0, lastSave: 0,
+};
+function taipeiNow() {
+  const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }); // YYYY-MM-DD HH:mm:ss
+  return { date: s.slice(0, 10), minute: Number(s.slice(11, 13)) * 60 + Number(s.slice(14, 16)), str: s };
+}
+function inDaySession(min) { return min >= SM.hhmmToMin('08:45') && min <= SM.hhmmToMin('13:45'); }
+function inNightSession(min) { return min >= SM.hhmmToMin('15:00') || min <= SM.hhmmToMin('05:00'); }
+function resetDay(date) {
+  S.date = date; S.book = new SM.FlowBook(settings.params); S.trader = new SM.PaperTrader(settings.params);
+  S.series = []; S.processedMinute = -1; S.snaps = {}; S.signals = []; S.lastMood = null; S.lastSummaryMin = -1;
+  tgSent.clear();
+}
+function saveState() {
+  if (!S.book || S.demo) return;
+  const now = Date.now(); if (now - S.lastSave < 8000) return; S.lastSave = now;
+  try {
+    localStorage.setItem(LS_STATE, JSON.stringify({
+      date: S.date, bars: S.book.bars, totals: S.book.totals, snaps: S.snaps, signals: S.signals.slice(-100),
+      trader: { pos: S.trader.pos, trades: S.trader.trades, equity: S.trader.equity, peak: S.trader.peak, maxDD: S.trader.maxDD, dayTrades: S.trader.dayTrades, lastExitMinute: S.trader.lastExitMinute },
+      processedMinute: S.processedMinute, quotes: S.quotes,
+    }));
+  } catch (_) {}
+}
+function restoreState() {
+  try {
+    const st = JSON.parse(localStorage.getItem(LS_STATE) || 'null');
+    if (!st || st.date !== taipeiNow().date) return false;
+    resetDay(st.date);
+    S.book.bars = st.bars || []; S.book._byMinute = new Map(S.book.bars.map(b => [b.minute, b])); Object.assign(S.book.totals, st.totals || {});
+    S.snaps = st.snaps || {}; S.signals = st.signals || []; S.processedMinute = st.processedMinute ?? -1; S.quotes = st.quotes || {};
+    Object.assign(S.trader, st.trader || {});
+    S.series = SM.computeSeries(S.book.bars, settings.params);
+    log(`已還原今日狀態（${S.book.bars.length} 根 K，${S.trader.trades.length} 筆交易）`);
+    return true;
+  } catch (_) { return false; }
+}
+
+// ---------------- 訊號處理 ----------------
+function handleEvents(events, ind) {
+  for (const e of events) {
+    const sig = Object.assign({ smi: ind?.smi, winBig: ind?.winBig, winRetail: ind?.winRetail }, e);
+    S.signals.push(sig);
+    const sideTxt = e.side > 0 ? '多' : '空';
+    if (e.type === 'entry') {
+      const p = settings.params;
+      const stop = e.price - e.side * p.stopPts, tgt = e.price + e.side * p.targetPts;
+      const mood = SM.sentiment(S.book.totals);
+      const text = `🔔 <b>台指期聰明錢訊號</b>${S.demo ? '（示範）' : ''}\n${S.date} ${e.time}  <b>${sideTxt}單進場 @ ${fmt(e.price)}</b>\nSMI ${signed(ind.smi, 2)}（大單淨流 ${signed(ind.winBig, 1)} 口 / 散戶淨流 ${signed(ind.winRetail, 1)} 口）\n大戶心態 ${mood.score} 分（${mood.label}）\n停損 ${fmt(stop)} / 停利 ${fmt(tgt)}\n${e.reason}`;
+      log(`進場 ${sideTxt} @ ${e.price} ${e.time} SMI=${ind.smi}`);
+      if (settings.tgEntry) notify(`entry|${S.date}|${e.time}|${e.side}`, text);
+    } else {
+      const text = `✅ <b>台指期模擬出場</b>${S.demo ? '（示範）' : ''}\n${S.date} ${e.time}  ${sideTxt}單出場 @ ${fmt(e.price)}\n損益 <b>${signed(e.pnl, 1)} 點</b>（${signed(Math.round(e.pnl * SM.POINT_VALUE_NTD))} 元）· 原因：${reasonTxt(e.reason)}\n今日累計 ${signed(S.trader.equity, 1)} 點 / ${S.trader.trades.length} 筆`;
+      log(`出場 ${sideTxt} @ ${e.price} ${e.time} pnl=${e.pnl} (${e.reason})`);
+      if (settings.tgExit) notify(`exit|${S.date}|${e.time}|${e.reason}`, text);
+    }
+  }
+}
+function reasonTxt(r) { return { stop: '停損', target: '停利', flat: '收盤前平倉', 'smi-flip': 'SMI 反向', eod: '日終平倉' }[r] || r; }
+function checkMood() {
+  const m = SM.sentiment(S.book.totals);
+  if (m.label === '樣本不足') return;
+  if (S.lastMood && S.lastMood.tone !== m.tone && settings.tgMood) {
+    const ind = S.series[S.series.length - 1] || {};
+    notify(`mood|${S.date}|${ind.time}|${m.tone}`, `🧭 <b>大戶心態轉變</b>${S.demo ? '（示範）' : ''}\n${S.date} ${ind.time || ''}  ${S.lastMood.label} → <b>${m.label}</b>（${m.score} 分）\n大單淨買比 ${signed(m.bigRatio * 100, 1)}% / 散戶淨買比 ${signed(m.retailRatio * 100, 1)}%\n${m.divergence || ''}`);
+  }
+  S.lastMood = m;
+}
+/** 對已收完的分鐘 K 跑策略（與回測完全同一套邏輯） */
+function processBars(currentMinute) {
+  const bars = S.book.bars;
+  if (!bars.length) return;
+  S.series = SM.computeSeries(bars, settings.params);
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    if (b.minute <= S.processedMinute || b.minute >= currentMinute || b.close == null) continue;
+    const ev = S.trader.onBar(b, S.series[i]);
+    if (ev.length) handleEvents(ev, S.series[i]);
+    S.processedMinute = b.minute;
+  }
+  checkMood();
+  if (settings.tgSummary && currentMinute - S.lastSummaryMin >= 30 && S.series.length > 15) {
+    S.lastSummaryMin = currentMinute;
+    const m = SM.sentiment(S.book.totals), ind = S.series[S.series.length - 1];
+    notify(`sum|${S.date}|${currentMinute}`, `📊 <b>聰明錢 30 分摘要</b>\n${S.date} ${ind.time}  價 ${fmt(ind.close)}（VWAP ${fmt(ind.vwap)}）\n大戶心態 ${m.score} 分 ${m.label}\n大單淨 ${signed(S.book.totals.bigBuy - S.book.totals.bigSell, 0)} 口 / 散戶淨 ${signed(S.book.totals.smallBuy - S.book.totals.smallSell, 0)} 口\nSMI ${signed(ind.smi, 2)}；模擬 ${signed(S.trader.equity, 1)} 點`);
+  }
+}
+
+// ---------------- 快照輪詢 ----------------
+function pickNear(rows, prefix) {
+  const list = (rows || []).filter(r => String(r.futures_id || '').toUpperCase().startsWith(prefix) && !String(r.futures_id || '').includes('/'));
+  if (!list.length) return null;
+  list.sort((a, b) => Number(b.total_volume || 0) - Number(a.total_volume || 0));
+  return list[0];
+}
+async function pollOnce() {
+  const now = taipeiNow();
+  if (S.date !== now.date) { resetDay(now.date); }
+  let minute = now.minute, anyOk = false, errs = [];
+  for (const pr of PRODUCTS) {
+    try {
+      const j = await finmind('taiwan_futures_snapshot', { data_id: pr.snap }, 12000);
+      const row = pickNear(j.data, pr.snap);
+      if (!row) { errs.push(`${pr.key}: 無資料`); continue; }
+      anyOk = true;
+      const t = SM.parseTickTime(row.date, now.minute);
+      if (pr.key === 'TX' && t.minute) minute = t.minute;
+      const prev = S.snaps[pr.key];
+      const trades = SM.snapshotToTrades(prev, row, pr.key, { minute: t.minute || now.minute });
+      S.book.addTrades(trades);
+      S.snaps[pr.key] = row;
+      S.quotes[pr.key] = { price: Number(row.close), chg: Number(row.change_price), chgRate: Number(row.change_rate), tv: Number(row.total_volume), lastVol: Number(row.volume), tick: Number(row.TickType ?? row.tick_type), bid: Number(row.buy_price), ask: Number(row.sell_price), time: row.date, id: row.futures_id };
+    } catch (e) { errs.push(`${pr.key}: ${e.message}`); }
+  }
+  if (anyOk) {
+    badge('bData', `FinMind 快照 ✓ ${S.quotes.TX?.time?.slice(11, 19) || ''}`, 'ok');
+    notice('');
+    if (inDaySession(minute)) processBars(minute); else { S.series = SM.computeSeries(S.book.bars, settings.params); checkMood(); }
+    render(); saveState();
+  } else {
+    badge('bData', 'FinMind ✗', 'err');
+    const msg = errs.join('；');
+    notice(`即時快照取得失敗：${msg}<br>請確認 FinMind Token 為<b>付費(sponsor)</b>方案、已在「設定」填入，且網路可連 api.finmindtrade.com（或本機代理 / Netlify 函式）。<br>可先按「示範資料」看操作流程。`);
+    log('快照失敗：' + msg, 'ERR');
+  }
+  if (errs.length && anyOk) log('部分商品失敗：' + errs.join('；'), 'WARN');
+}
+function startLive() {
+  stopAll();
+  S.demo = false;
+  const now = taipeiNow();
+  if (!restoreState() || S.date !== now.date) resetDay(now.date);
+  S.running = true;
+  badge('bMode', '即時模式', 'info');
+  $('pollInfo').textContent = `每 ${settings.pollSec} 秒輪詢 TXF / MXF / TMF 快照`;
+  pollOnce();
+  S.timer = setInterval(pollOnce, settings.pollSec * 1000);
+  if (settings.mode === 'ws') startWs();
+  render();
+}
+function stopAll() {
+  S.running = false;
+  if (S.timer) clearInterval(S.timer); S.timer = null;
+  if (S.demoTimer) clearInterval(S.demoTimer); S.demoTimer = null;
+  if (S.ws) { try { S.ws.close(); } catch (_) {} S.ws = null; }
+  badge('bMode', '已停止', '');
+}
+
+// ---------------- WebSocket 逐筆（實驗）----------------
+function nearMonthCode() {
+  if (settings.wsCode) return settings.wsCode;
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
+  let y = now.getFullYear(), m = now.getMonth();
+  const first = new Date(y, m, 1); const wed = 1 + ((3 - first.getDay() + 7) % 7) + 14; // 第三個週三
+  const settled = now.getDate() > wed || (now.getDate() === wed && now.getHours() >= 14);
+  if (settled) { m++; if (m > 11) { m = 0; y++; } }
+  return 'TXF' + 'ABCDEFGHIJKL'[m] + String(y % 10);
+}
+function startWs() {
+  const code = nearMonthCode();
+  const url = `wss://api.finmindtrade.com/api/v4/websocket/taiwan_futopt_price_tick?data_id=${code}${settings.token ? '&token=' + encodeURIComponent(settings.token) : ''}`;
+  let first = true;
+  try {
+    const ws = new WebSocket(url);
+    S.ws = ws;
+    ws.onopen = () => { log('WS 已連線 ' + code); };
+    ws.onmessage = (m) => {
+      let d; try { d = JSON.parse(m.data); } catch (_) { return; }
+      if (first) { first = false; log('WS 首筆原始訊息：' + m.data.slice(0, 300)); }
+      const rows = Array.isArray(d) ? d : Array.isArray(d.data) ? d.data : [d];
+      for (const r of rows) {
+        const price = Number(r.price ?? r.close ?? r.Close ?? r.deal_price);
+        const vol = Number(r.volume ?? r.Volume ?? r.deal_volume ?? r.qty);
+        if (!Number.isFinite(price) || !(vol > 0)) continue;
+        const tt = Number(r.tick_type ?? r.TickType ?? 0);
+        const ts = SM.parseTickTime(r.date || r.time || r.Time || '', taipeiNow().minute);
+        const prevPx = S._wsLastPx; const side = tt === 1 ? 1 : tt === 2 ? -1 : SM.tickSide(price, prevPx, S._wsLastSide || 0);
+        S._wsLastPx = price; S._wsLastSide = side;
+        S.book.addTrade({ ms: ts.ms, minute: ts.minute, product: 'TX', price, volume: vol, side });
+        S.wsOk = true;
+      }
+      if (S.wsOk) { badge('bData', 'WS 逐筆 ✓', 'ok'); }
+    };
+    ws.onerror = () => { log('WS 連線錯誤，改用快照輪詢', 'WARN'); };
+    ws.onclose = () => { S.ws = null; if (S.wsOk) log('WS 已關閉'); };
+  } catch (e) { log('WS 無法建立：' + e.message, 'ERR'); }
+}
+
+// ---------------- 示範模式（合成資料以每秒 1 分鐘回放）----------------
+function startDemo() {
+  stopAll();
+  S.demo = true;
+  resetDay(taipeiNow().date);
+  const { rows } = SM.syntheticDay(Math.floor(Math.random() * 1e6));
+  S.demoTrades = SM.rowsToTrades(rows);
+  S.demoIdx = 0; S.demoMinute = SM.hhmmToMin('08:45');
+  S.running = true;
+  badge('bMode', '示範模式（合成資料）', 'warn');
+  badge('bData', '合成資料', 'warn');
+  notice('🎬 目前為<b>示範資料</b>（合成逐筆、每秒回放 1 分鐘），用來熟悉介面與訊號流程；實盤請於「設定」填入 FinMind 付費 Token 後按「開始」。');
+  $('pollInfo').textContent = '示範回放中…';
+  S.demoTimer = setInterval(() => {
+    const cur = S.demoMinute + 1;
+    while (S.demoIdx < S.demoTrades.length && S.demoTrades[S.demoIdx].minute < cur) {
+      const tr = S.demoTrades[S.demoIdx++];
+      S.book.addTrade(tr);
+      if (tr.product === 'TX') S.quotes.TX = { price: tr.price, chg: tr.price - S.demoTrades[0].price, tv: (S.quotes.TX?.tv || 0) + tr.volume, lastVol: tr.volume, tick: tr.side > 0 ? 1 : 2, time: `${S.date} ${SM.minToHHMM(tr.minute)}:00` };
+      else S.quotes[tr.product] = { price: tr.price, chg: 0, tv: (S.quotes[tr.product]?.tv || 0) + tr.volume, lastVol: tr.volume, tick: tr.side > 0 ? 1 : 2, time: `${S.date} ${SM.minToHHMM(tr.minute)}:00` };
+    }
+    S.demoMinute = cur;
+    processBars(cur);
+    render();
+    if (S.demoIdx >= S.demoTrades.length) { clearInterval(S.demoTimer); S.demoTimer = null; processBars(cur + 1); render(); badge('bMode', '示範結束', 'warn'); }
+  }, 1000);
+}
+
+// ---------------- 畫面 ----------------
+let chPrice, chFlow, chEq;
+function mkCharts() {
+  if (!window.Chart) return;
+  Chart.defaults.color = '#7b8794'; Chart.defaults.borderColor = '#1f2d40';
+  const common = { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { labels: { boxWidth: 10, font: { size: 10 } } } }, scales: { x: { ticks: { maxTicksLimit: 8, font: { size: 10 } } } } };
+  chPrice = new Chart($('chPrice'), { type: 'line', data: { labels: [], datasets: [
+    { label: '大台收盤', data: [], borderColor: '#00d4ff', borderWidth: 1.5, pointRadius: 0 },
+    { label: 'VWAP', data: [], borderColor: '#ffd700', borderWidth: 1, pointRadius: 0, borderDash: [4, 3] },
+    { label: '多單進場', data: [], type: 'scatter', pointStyle: 'triangle', pointRadius: 7, backgroundColor: '#00ff88', showLine: false },
+    { label: '空單進場', data: [], type: 'scatter', pointStyle: 'triangle', rotation: 180, pointRadius: 7, backgroundColor: '#ff4466', showLine: false },
+  ] }, options: Object.assign({}, common, { scales: { x: common.scales.x, y: { ticks: { font: { size: 10 } } } } }) });
+  chFlow = new Chart($('chFlow'), { type: 'bar', data: { labels: [], datasets: [
+    { label: 'SMI', data: [], backgroundColor: (c) => (c.raw >= 0 ? 'rgba(0,255,136,.45)' : 'rgba(255,68,102,.45)'), yAxisID: 'y2', order: 3 },
+    { label: '大戶累計淨流(口)', data: [], type: 'line', borderColor: '#00ff88', borderWidth: 2, pointRadius: 0, yAxisID: 'y', order: 1 },
+    { label: '散戶累計淨流(口)', data: [], type: 'line', borderColor: '#ff9f43', borderWidth: 1.5, pointRadius: 0, yAxisID: 'y', order: 2 },
+  ] }, options: Object.assign({}, common, { scales: { x: common.scales.x, y: { position: 'left', ticks: { font: { size: 10 } } }, y2: { position: 'right', grid: { drawOnChartArea: false }, ticks: { font: { size: 10 } } } } }) });
+}
+function render() {
+  // 報價
+  for (const pr of PRODUCTS) {
+    const q = S.quotes[pr.key], el = $('q-' + pr.key);
+    if (!q) continue;
+    el.querySelector('.px').textContent = fmt(q.price);
+    el.querySelector('.px').className = 'px ' + cls(q.chg);
+    el.querySelector('.chg').textContent = `${signed(q.chg)}${Number.isFinite(q.chgRate) ? ' (' + signed(q.chgRate, 2) + '%)' : ''}`;
+    el.querySelector('.chg').className = 'chg ' + cls(q.chg);
+    el.querySelector('.meta').textContent = `量 ${fmt(q.tv)} · 末筆 ${fmt(q.lastVol)} 口 ${q.tick === 1 ? '外盤' : q.tick === 2 ? '內盤' : ''}`;
+  }
+  $('quoteMeta').textContent = S.quotes.TX?.time ? `${S.quotes.TX.time}${S.quotes.TX.id ? ' · ' + S.quotes.TX.id : ''}` : '—';
+  if (!S.book) return;
+  const t = S.book.totals, m = SM.sentiment(t);
+  // 心態
+  $('vScore').textContent = m.label === '樣本不足' ? '—' : m.score; $('vLabel').textContent = m.label;
+  $('verdict').className = 'verdict ' + m.tone; $('needle').style.left = m.score + '%';
+  $('vNote').textContent = m.label === '樣本不足' ? `大單樣本 ${fmt(m.bigTotal)} 口，需 ≥ 20 口才評分` : `大單淨買比 ${signed(m.bigRatio * 100, 1)}%（${fmt(m.bigTotal)} 口）· 散戶淨買比 ${signed(m.retailRatio * 100, 1)}%（${fmt(m.retailTotal, 1)} 口）${m.divergence ? ' · ' + m.divergence : ''}`;
+  const ind = S.series[S.series.length - 1];
+  if (ind) {
+    $('kSmi').textContent = signed(ind.smi, 2); $('kSmi').className = 'v ' + cls(ind.smi);
+    $('kWinBig').textContent = signed(ind.winBig, 0); $('kWinBig').className = 'v ' + cls(ind.winBig);
+    $('kWinRet').textContent = signed(ind.winRetail, 1); $('kWinRet').className = 'v ' + cls(ind.winRetail);
+    const d = ind.close - ind.vwap; $('kVwap').textContent = `${signed(d, 0)}`; $('kVwap').className = 'v ' + cls(d);
+  }
+  // 流量表
+  const set = (id, v, d) => { const e = $(id); e.textContent = fmt(v, d); };
+  set('fBigB', t.bigBuy); set('fBigS', t.bigSell); $('fBigN').textContent = signed(t.bigBuy - t.bigSell); $('fBigN').className = cls(t.bigBuy - t.bigSell); set('fBigT', t.bigTrades);
+  set('fMidB', t.midBuy); set('fMidS', t.midSell); $('fMidN').textContent = signed(t.midBuy - t.midSell); $('fMidN').className = cls(t.midBuy - t.midSell);
+  set('fSmB', t.smallBuy, 1); set('fSmS', t.smallSell, 1); $('fSmN').textContent = signed(t.smallBuy - t.smallSell, 1); $('fSmN').className = cls(t.smallBuy - t.smallSell); set('fSmT', t.smallTrades);
+  set('fUnB', t.unsBuy, 0); set('fUnS', t.unsSell, 0);
+  const sampled = t.bigBuy + t.bigSell + t.midBuy + t.midSell + t.smallBuy + t.smallSell, uns = t.unsBuy + t.unsSell;
+  $('fCov').textContent = sampled + uns > 0 ? `取樣率 ${fmt(sampled / (sampled + uns) * 100, 0)}%` : '—';
+  // 圖
+  if (chPrice) {
+    const labels = S.series.map(s => s.time);
+    chPrice.data.labels = labels;
+    chPrice.data.datasets[0].data = S.series.map(s => s.close);
+    chPrice.data.datasets[1].data = S.series.map(s => s.vwap);
+    const idx = new Map(labels.map((l, i) => [l, i]));
+    chPrice.data.datasets[2].data = S.signals.filter(s => s.type === 'entry' && s.side > 0).map(s => ({ x: s.time, y: s.price }));
+    chPrice.data.datasets[3].data = S.signals.filter(s => s.type === 'entry' && s.side < 0).map(s => ({ x: s.time, y: s.price }));
+    chPrice.update();
+    chFlow.data.labels = labels;
+    chFlow.data.datasets[0].data = S.series.map(s => s.smi);
+    chFlow.data.datasets[1].data = S.series.map(s => s.cumBig);
+    chFlow.data.datasets[2].data = S.series.map(s => s.cumRetail);
+    chFlow.update();
+  }
+  // 部位 / 訊號
+  const pos = S.trader.pos;
+  if (pos) {
+    const px = S.quotes.TX?.price ?? ind?.close; const upl = px != null ? (px - pos.entry) * pos.side : 0;
+    $('posBox').innerHTML = `<b class="${pos.side > 0 ? 'up' : 'down'}">${pos.side > 0 ? '多單' : '空單'} 1 口</b> 進場 ${fmt(pos.entry)}（${pos.time}）· 未實現 <b class="${cls(upl)}">${signed(upl, 0)} 點</b> · 停損 ${fmt(pos.entry - pos.side * settings.params.stopPts)} / 停利 ${fmt(pos.entry + pos.side * settings.params.targetPts)}`;
+  } else $('posBox').textContent = `尚無部位（進場門檻 |SMI| ≥ ${settings.params.zEntry}${settings.params.trendFilter ? '，且價格站在 VWAP 同側' : ''}）`;
+  const last = S.signals[S.signals.length - 1];
+  $('lastSig').textContent = last ? `最近訊號：${last.time} ${last.type === 'entry' ? (last.side > 0 ? '多單進場' : '空單進場') : '出場'} @ ${fmt(last.price)}${last.pnl != null ? ' 損益 ' + signed(last.pnl, 1) : ''}（${reasonTxt(last.reason)}）` : '尚無訊號';
+  // 模擬頁
+  const st = S.trader.stats();
+  $('sTrades').textContent = st.trades; $('sPnl').textContent = signed(st.pnlPts, 1); $('sPnl').className = 'v ' + cls(st.pnlPts);
+  $('sNtd').textContent = signed(st.pnlNTD); $('sNtd').className = 'v ' + cls(st.pnlNTD);
+  $('sWin').textContent = st.trades ? fmt(st.winRate * 100, 0) + '%' : '—'; $('sPf').textContent = st.trades ? st.profitFactor : '—'; $('sDd').textContent = fmt(st.maxDD, 1);
+  $('sigList').innerHTML = S.signals.length ? S.signals.slice().reverse().slice(0, 40).map(s => `<div class="sig ${s.type === 'entry' ? (s.side > 0 ? 'long' : 'short') : 'exit'}"><div class="t">${s.time}</div>${s.type === 'entry' ? (s.side > 0 ? '🟢 多單進場' : '🔴 空單進場') : '🟡 出場'} @ ${fmt(s.price)}${s.pnl != null ? ` · <b class="${cls(s.pnl)}">${signed(s.pnl, 1)} 點</b>` : ''} · ${reasonTxt(s.reason)}${s.smi != null ? ` · SMI ${signed(s.smi, 2)}` : ''}</div>`).join('') : '尚無訊號';
+  $('tradeTbl').querySelector('tbody').innerHTML = S.trader.trades.length ? S.trader.trades.slice().reverse().map(tr => `<tr><td class="${tr.side > 0 ? 'up' : 'down'}">${tr.side > 0 ? '多' : '空'}</td><td>${fmt(tr.entry)}</td><td>${fmt(tr.exit)}</td><td>${tr.entryTime}→${tr.exitTime}</td><td class="${cls(tr.pnl)}">${signed(tr.pnl, 1)}</td><td>${reasonTxt(tr.reason)}</td></tr>`).join('') : '<tr><td colspan="6" class="muted">—</td></tr>';
+}
+
+// ---------------- 盤後籌碼底牌 ----------------
+async function loadContext() {
+  const tb = $('ctxTbl').querySelector('tbody');
+  tb.innerHTML = '<tr><td colspan="5" class="muted">載入中…</td></tr>';
+  const end = taipeiNow().date, start = ymd(new Date(Date.now() - 12 * 864e5));
+  const rows = [];
+  try {
+    const j = await finmind('data', { dataset: 'TaiwanFuturesInstitutionalInvestors', data_id: 'TX', start_date: start, end_date: end });
+    const byDate = {}; for (const r of j.data || []) (byDate[r.date] = byDate[r.date] || []).push(r);
+    const dates = Object.keys(byDate).sort(); const d0 = dates[dates.length - 1], d1 = dates[dates.length - 2];
+    for (const r of byDate[d0] || []) {
+      const l = Number(r.long_open_interest_balance_volume), s = Number(r.short_open_interest_balance_volume), net = l - s;
+      const y = (byDate[d1] || []).find(x => x.institutional_investor === r.institutional_investor);
+      const chg = y ? net - (Number(y.long_open_interest_balance_volume) - Number(y.short_open_interest_balance_volume)) : null;
+      rows.push(`<tr><td>${r.institutional_investor} 大台 OI</td><td>${fmt(l)}</td><td>${fmt(s)}</td><td class="${cls(net)}">${signed(net)}</td><td class="${cls(chg)}">${chg == null ? '—' : signed(chg)}</td></tr>`);
+    }
+    $('ctxMeta').textContent = d0 || '—';
+  } catch (e) { rows.push(`<tr><td colspan="5" class="down">法人期貨：${e.message}</td></tr>`); }
+  try {
+    const j = await finmind('data', { dataset: 'TaiwanFuturesOpenInterestLargeTraders', data_id: 'TX', start_date: start, end_date: end });
+    const list = (j.data || []).filter(r => /臺股期貨|台股期貨|TX/i.test(r.name || '') && /all|所有|全部/i.test(String(r.contract_type || '')));
+    const src = list.length ? list : (j.data || []);
+    const dates = [...new Set(src.map(r => r.date))].sort(); const d0 = dates[dates.length - 1], d1 = dates[dates.length - 2];
+    const r0 = src.find(r => r.date === d0), r1 = src.find(r => r.date === d1);
+    if (r0) {
+      const b10 = Number(r0.buy_top10_trader_open_interest), s10 = Number(r0.sell_top10_trader_open_interest), net = b10 - s10;
+      const chg = r1 ? net - (Number(r1.buy_top10_trader_open_interest) - Number(r1.sell_top10_trader_open_interest)) : null;
+      rows.push(`<tr><td>前十大交易人 OI（${r0.contract_type || ''}）</td><td>${fmt(b10)}</td><td>${fmt(s10)}</td><td class="${cls(net)}">${signed(net)}</td><td class="${cls(chg)}">${chg == null ? '—' : signed(chg)}</td></tr>`);
+      const b5s = Number(r0.buy_top5_specific_open_interest), s5s = Number(r0.sell_top5_specific_open_interest);
+      if (Number.isFinite(b5s)) rows.push(`<tr><td>前五大特定法人 OI</td><td>${fmt(b5s)}</td><td>${fmt(s5s)}</td><td class="${cls(b5s - s5s)}">${signed(b5s - s5s)}</td><td>—</td></tr>`);
+    }
+  } catch (e) { rows.push(`<tr><td colspan="5" class="down">大額交易人：${e.message}</td></tr>`); }
+  tb.innerHTML = rows.join('') || '<tr><td colspan="5" class="muted">無資料</td></tr>';
+}
+
+// ---------------- 回測 ----------------
+async function fetchDayTicks(date) {
+  const out = {};
+  for (const pr of PRODUCTS) {
+    $('btStatus').textContent = `下載 ${date} ${pr.key} 逐筆…`;
+    const j = await finmind('data', { dataset: 'TaiwanFuturesTick', data_id: pr.key, start_date: date, end_date: date }, 120000);
+    out[pr.key] = j.data || [];
+  }
+  return out;
+}
+async function collectDays() {
+  const days = [];
+  if ($('btSource').value === 'demo') {
+    const n = Math.max(1, Math.min(30, Number($('btDemoDays').value) || 5));
+    for (let i = 0; i < n; i++) days.push({ date: `示範#${i + 1}`, trades: SM.rowsToTrades(SM.syntheticDay(1000 + i).rows) });
+    return days;
+  }
+  const s = $('btStart').value, e = $('btEnd').value || s;
+  if (!s) throw new Error('請選擇起始日');
+  const d = new Date(s + 'T00:00:00'), end = new Date(e + 'T00:00:00');
+  let guard = 0;
+  while (d <= end && guard++ < 40) {
+    const ds = ymd(d);
+    if (d.getDay() !== 0 && d.getDay() !== 6) {
+      try {
+        const rows = await fetchDayTicks(ds);
+        const trades = SM.rowsToTrades(rows);
+        if (trades.length > 100) days.push({ date: ds, trades }); else log(`${ds} 無逐筆資料（假日或未更新）`, 'WARN');
+      } catch (err) { log(`${ds} 下載失敗：${err.message}`, 'ERR'); if (/sponsor|permission|付費|權限|illegal/i.test(err.message)) throw err; }
+    }
+    d.setDate(d.getDate() + 1);
+  }
+  if (!days.length) throw new Error('沒有可用的交易日資料');
+  return days;
+}
+function renderEquity(points, labels) {
+  if (!window.Chart) return;
+  if (chEq) chEq.destroy();
+  chEq = new Chart($('chEq'), { type: 'line', data: { labels, datasets: [{ label: '累計損益(點)', data: points, borderColor: '#00d4ff', backgroundColor: 'rgba(0,212,255,.15)', fill: true, pointRadius: 0, borderWidth: 1.5 }] }, options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksLimit: 8, font: { size: 10 } } } } } });
+}
+async function runBacktest() {
+  $('btnBtRun').disabled = true; $('btnBtGrid').disabled = true;
+  try {
+    const days = await collectDays();
+    $('btStatus').textContent = '計算中…';
+    await new Promise(r => setTimeout(r, 30));
+    const allTrades = []; let eq = 0; const eqPts = [], eqLbl = []; let wins = 0, gw = 0, gl = 0, dd = 0, peak = 0, posDays = 0;
+    for (const day of days) {
+      const r = SM.backtestDay(day.trades, settings.params);
+      for (const tr of r.trades) { allTrades.push(Object.assign({ date: day.date }, tr)); eq += tr.pnl; eqPts.push(SM.round(eq, 1)); eqLbl.push(`${day.date} ${tr.exitTime}`); if (tr.pnl > 0) { wins++; gw += tr.pnl; } else gl -= tr.pnl; peak = Math.max(peak, eq); dd = Math.max(dd, peak - eq); }
+      if (r.stats.pnlPts > 0) posDays++;
+    }
+    const n = allTrades.length;
+    $('btResultPanel').style.display = 'block';
+    $('btMeta').textContent = `${days.length} 個交易日 · 參數 大單≥${settings.params.bigLot} 窗${settings.params.windowMin} SMI${settings.params.zEntry} 停損${settings.params.stopPts} 停利${settings.params.targetPts}`;
+    $('btKpis').innerHTML = [['交易次數', n], ['總損益(點)', signed(eq, 1)], ['總損益(元)', signed(Math.round(eq * SM.POINT_VALUE_NTD))], ['勝率', n ? fmt(wins / n * 100, 0) + '%' : '—'], ['獲利因子', gl > 0 ? fmt(gw / gl, 2) : '—'], ['最大回撤(點)', fmt(dd, 1)], ['平均每筆(點)', n ? signed(eq / n, 1) : '—'], ['正報酬日', `${posDays}/${days.length}`]]
+      .map(([k, v]) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+    renderEquity(eqPts, eqLbl);
+    $('btTradeTbl').querySelector('tbody').innerHTML = allTrades.slice().reverse().slice(0, 200).map(tr => `<tr><td>${tr.date}</td><td class="${tr.side > 0 ? 'up' : 'down'}">${tr.side > 0 ? '多' : '空'}</td><td>${fmt(tr.entry)}</td><td>${fmt(tr.exit)}</td><td>${tr.entryTime}→${tr.exitTime}</td><td class="${cls(tr.pnl)}">${signed(tr.pnl, 1)}</td><td>${reasonTxt(tr.reason)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">無交易</td></tr>';
+    $('btStatus').textContent = `完成：${days.length} 日 / ${n} 筆`;
+    log(`回測完成 ${days.length} 日，損益 ${signed(eq, 1)} 點`);
+  } catch (e) { $('btStatus').textContent = '失敗：' + e.message; log('回測失敗：' + e.message, 'ERR'); }
+  $('btnBtRun').disabled = false; $('btnBtGrid').disabled = false;
+}
+let lastGrid = null;
+async function runGrid() {
+  $('btnBtRun').disabled = true; $('btnBtGrid').disabled = true;
+  try {
+    const days = await collectDays();
+    $('btStatus').textContent = '網格搜尋計算中（108 組）…';
+    await new Promise(r => setTimeout(r, 30));
+    const t0 = performance.now();
+    const res = SM.gridSearch(days, {}, settings.params);
+    lastGrid = res;
+    $('gridPanel').style.display = 'block';
+    $('gridTbl').querySelector('tbody').innerHTML = res.slice(0, 20).map((r, i) => `<tr><td>${i + 1}</td><td>${r.params.bigLot}</td><td>${r.params.windowMin}</td><td>${r.params.zEntry}</td><td>${r.params.stopPts}</td><td>${r.params.targetPts}</td><td class="${cls(r.pnlPts)}">${signed(r.pnlPts, 1)}</td><td>${r.trades}</td><td>${fmt(r.winRate * 100, 0)}%</td><td>${r.profitFactor}</td><td>${fmt(r.maxDD, 1)}</td><td>${r.posDays}/${r.days}</td><td><button class="btn sm outline" data-apply="${i}">套用</button></td></tr>`).join('');
+    $('btStatus').textContent = `完成：${days.length} 日 × ${res.length} 組，${Math.round(performance.now() - t0)} ms`;
+    log(`網格完成，最佳 ${JSON.stringify(res[0].params)} 損益 ${res[0].pnlPts} 點`);
+  } catch (e) { $('btStatus').textContent = '失敗：' + e.message; log('網格失敗：' + e.message, 'ERR'); }
+  $('btnBtRun').disabled = false; $('btnBtGrid').disabled = false;
+}
+$('gridTbl').addEventListener('click', (ev) => {
+  const b = ev.target.closest('button[data-apply]'); if (!b || !lastGrid) return;
+  Object.assign(settings.params, lastGrid[Number(b.dataset.apply)].params);
+  saveSettings(); fillForm();
+  if (S.book) { S.book.params = SM.mergeParams(settings.params); S.trader.p = SM.mergeParams(settings.params); }
+  $('btStatus').textContent = '已套用該組參數到即時策略並儲存';
+});
+
+// ---------------- 檢核 ----------------
+function engineTests() {
+  const out = []; const ok = (name, cond, msg) => out.push({ name, ok: !!cond, msg: msg || '' });
+  try {
+    ok('分類：大台 10 口 = 大單', SM.classify('TX', 10) === 'big');
+    ok('分類：大台 9 口 = 中單', SM.classify('TX', 9) === 'mid');
+    ok('分類：大台 1 口 / 小台 / 微台 = 小單', SM.classify('TX', 1) === 'small' && SM.classify('MTX', 50) === 'small' && SM.classify('TMF', 100) === 'small');
+    ok('契約權重 小台 0.25 / 微台 0.025', SM.contractWeight('MXF') === 0.25 && SM.contractWeight('TMF') === 0.025);
+    ok('Tick Rule 上漲=買 下跌=賣 平盤沿用', SM.tickSide(101, 100, 0) === 1 && SM.tickSide(99, 100, 0) === -1 && SM.tickSide(100, 100, -1) === -1);
+    ok('時間解析 08:45:30.500', (() => { const t = SM.parseTickTime('2026-09-07 08:45:30.500'); return t.minute === 525 && t.ms === 31530500; })());
+    ok('近月契約排除價差單', SM.selectNearContract([{ contract_date: '202609/202610', volume: 999 }, { contract_date: '202609', volume: 10 }, { contract_date: '202610', volume: 5 }]) === '202609');
+    const snapPrev = { close: 24000, total_volume: 1000, TickType: 1 }, snapCur = { close: 24002, total_volume: 1030, volume: 12, TickType: 1, date: '2026-09-07 09:00:05' };
+    const st = SM.snapshotToTrades(snapPrev, snapCur, 'TXF');
+    ok('快照差量：取樣 12 口(大單) + 未取樣 18 口', st.length === 2 && st[0].volume === 12 && st[0].side === 1 && st[1].volume === 18 && st[1].forceSmall === true);
+    const { rows, regime } = SM.syntheticDay(7);
+    const trades = SM.rowsToTrades(rows);
+    ok('合成資料轉逐筆並排序', trades.length > 5000 && trades.every((t, i) => i === 0 || t.ms >= trades[i - 1].ms));
+    const r = SM.backtestDay(trades, {});
+    ok('回測產生 1 分 K 與序列', r.bars.length >= 290 && r.series.length === r.bars.length);
+    let agree = 0, n = 0; r.series.forEach((s, i) => { if (regime[i] && Math.abs(s.winBig) > 5) { n++; if (Math.sign(s.winBig) === regime[i]) agree++; } });
+    ok(`大單淨流方向偵測趨勢一致率 ${(agree / n * 100).toFixed(0)}% (需 > 58%)`, agree / n > 0.58);
+    ok('模擬盤損益 = Σ(出場-進場)×方向 − 成本', Math.abs(r.trades.reduce((s, t) => s + t.pnl, 0) - r.stats.pnlPts) < 1e-6 && r.trades.every(t => Math.abs(((t.exit - t.entry) * t.side - 1.5) - t.pnl) < 1e-6));
+    ok('停損交易虧損不超過停損+成本', r.trades.filter(t => t.reason === 'stop').every(t => t.pnl >= -(30 + 1.5) - 1e-6));
+    const g = SM.gridSearch([{ date: 'a', trades }], { bigLot: [10], windowMin: [10], zEntry: [1.5], stopPts: [30], targetPts: [60] }, {});
+    ok('網格單組結果 = 單日回測結果', g.length === 1 && g[0].pnlPts === r.stats.pnlPts);
+    const fb = new SM.FlowBook({}); fb.addTrades(trades);
+    const m = SM.sentiment(fb.totals);
+    ok('大戶心態評分在 0–100', m.score >= 0 && m.score <= 100 && m.label !== '樣本不足');
+  } catch (e) { out.push({ name: '引擎測試例外', ok: false, msg: e.message }); }
+  return out;
+}
+async function runChecks() {
+  readForm(); saveSettings();
+  const list = $('chkList'); list.innerHTML = ''; $('chkStatus').textContent = '執行中…';
+  const add = (r) => { list.insertAdjacentHTML('beforeend', `<div class="chk"><div class="st">${r.ok ? '✅' : r.warn ? '⚠️' : '❌'}</div><div><div>${r.name}</div>${r.msg ? `<div class="m">${r.msg}</div>` : ''}</div></div>`); };
+  for (const r of engineTests()) add(r);
+  add({ name: 'Chart.js 載入', ok: !!window.Chart, msg: window.Chart ? '' : 'CDN 無法載入（離線？）圖表將不顯示，其餘功能正常' });
+  add({ name: '執行環境', ok: true, msg: `${isCloud() ? '雲端部署（用 Netlify/Cloudflare 函式代理）' : location.protocol === 'file:' ? 'file:// 本機開啟（先直連 FinMind，失敗再走本機代理 8787）' : '本機 http'}` });
+  // 本機代理
+  if (!isCloud()) {
+    let okp = false, msg = '';
+    for (const h of proxyHosts()) { try { const j = await fetchJson(`http://${h}/health`, {}, 3000); if (j.ok) { okp = true; msg = h; break; } } catch (e) { msg = e.message; } }
+    add({ name: '本機代理 local-proxy.py', ok: okp, warn: !okp, msg: okp ? `已連線 ${msg}` : '未啟動（可選；FinMind 可直連時不需要）' });
+    badge('bProxy', okp ? '本機代理 ✓' : '代理 —', okp ? 'ok' : '');
+  } else {
+    try { const j = await fetchJson('/.netlify/functions/finmind?health=1', {}, 8000); add({ name: '雲端 FinMind 函式', ok: !!j.ok, msg: j.ok ? `Token 來源 ${j.tokenSource}，有效 ${j.tokenValid}` : JSON.stringify(j) }); badge('bProxy', j.ok ? '雲端函式 ✓' : '雲端函式 ✗', j.ok ? 'ok' : 'err'); } catch (e) { add({ name: '雲端 FinMind 函式', ok: false, msg: e.message }); }
+    try { const j = await fetchJson('/.netlify/functions/telegram?health=1', {}, 8000); add({ name: '雲端 Telegram 函式', ok: !!j.ok, msg: j.ok ? `環境變數 Bot ${j.hasEnvBot} / Chat ${j.hasEnvChat}` : '' }); } catch (e) { add({ name: '雲端 Telegram 函式', ok: false, warn: true, msg: e.message }); }
+  }
+  // FinMind token
+  if (!settings.token) add({ name: 'FinMind Token', ok: false, msg: '未填寫（設定分頁）' });
+  else {
+    try { const j = await finmind('data', { dataset: 'TaiwanStockTradingDate', start_date: '2026-01-01', end_date: '2026-01-10' }, 15000); add({ name: 'FinMind Token 有效（免費資料集）', ok: (j.data || []).length > 0, msg: `${(j.data || []).length} 筆` }); }
+    catch (e) { add({ name: 'FinMind Token 有效（免費資料集）', ok: false, msg: e.message }); }
+    try { const j = await finmind('taiwan_futures_snapshot', { data_id: 'TXF' }, 15000); const row = pickNear(j.data, 'TXF'); add({ name: '即時快照權限 taiwan_futures_snapshot（付費）', ok: !!row, msg: row ? `${row.futures_id} ${row.date} 價 ${row.close} 量 ${row.total_volume} TickType=${row.TickType ?? row.tick_type ?? '無'}` : '回傳無資料（非交易時段可能為空）', warn: !row }); if (row) badge('bData', 'FinMind 快照 ✓', 'ok'); }
+    catch (e) { add({ name: '即時快照權限 taiwan_futures_snapshot（付費）', ok: false, msg: e.message + '（需 FinMind sponsor / 付費方案）' }); }
+    try { const j = await finmind('taiwan_futures_snapshot', { data_id: 'MXF' }, 15000); const row = pickNear(j.data, 'MXF'); add({ name: '小台快照 MXF', ok: !!row, warn: !row, msg: row ? `${row.futures_id} 量 ${row.total_volume}` : '無資料（若持續為空，小台流量將缺失）' }); } catch (e) { add({ name: '小台快照 MXF', ok: false, warn: true, msg: e.message }); }
+    try { const j = await finmind('taiwan_futures_snapshot', { data_id: 'TMF' }, 15000); const row = pickNear(j.data, 'TMF'); add({ name: '微台快照 TMF', ok: !!row, warn: !row, msg: row ? `${row.futures_id} 量 ${row.total_volume}` : '無資料' }); } catch (e) { add({ name: '微台快照 TMF', ok: false, warn: true, msg: e.message }); }
+    try {
+      const d = new Date(Date.now() - 864e5 * 3); while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+      const ds = ymd(d);
+      const j = await finmind('data', { dataset: 'TaiwanFuturesTick', data_id: 'TX', start_date: ds, end_date: ds }, 120000);
+      const n = (j.data || []).length; add({ name: `歷史逐筆權限 TaiwanFuturesTick（${ds}）`, ok: n > 0, msg: n ? `${fmt(n)} 筆，首筆 ${JSON.stringify(j.data[0]).slice(0, 160)}` : '無資料' });
+    } catch (e) { add({ name: '歷史逐筆權限 TaiwanFuturesTick', ok: false, msg: e.message }); }
+  }
+  // Telegram
+  if (settings.tgBot && settings.tgChat) {
+    try { const j = await fetchJson(`https://api.telegram.org/bot${settings.tgBot}/getMe`, {}, 10000); add({ name: 'Telegram Bot 有效', ok: !!j.ok, msg: j.ok ? `@${j.result.username}` : (j.description || '') }); badge('bTg', j.ok ? 'Telegram ✓' : 'Telegram ✗', j.ok ? 'ok' : 'err'); }
+    catch (e) { add({ name: 'Telegram Bot 有效', ok: false, msg: e.message + '（瀏覽器可能擋 api.telegram.org，將改走代理）' }); }
+  } else add({ name: 'Telegram', ok: false, warn: true, msg: isCloud() ? '未在頁面填寫；若 Netlify 已設環境變數則仍可推播' : '未設定 Bot Token / Chat ID' });
+  $('chkStatus').textContent = '檢核完成';
+}
+
+// ---------------- 事件綁定 ----------------
+document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('nav.tabs button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + b.dataset.page));
+  if (b.dataset.page === 'live' && chPrice) { chPrice.resize(); chFlow.resize(); }
+}));
+$('btnStart').addEventListener('click', () => { readForm(); saveSettings(); if (!settings.token) { notice('請先到「設定」填入 FinMind <b>付費</b> Token，或按「示範資料」。'); document.querySelector('[data-page=set]').click(); return; } startLive(); });
+$('btnStop').addEventListener('click', () => { stopAll(); $('pollInfo').textContent = '已停止'; });
+$('btnDemo').addEventListener('click', () => { readForm(); startDemo(); });
+$('btnSave').addEventListener('click', () => { readForm(); saveSettings(); fillForm(); $('saveMsg').textContent = '已儲存（僅存在此瀏覽器）'; if (S.book) { S.book.params = SM.mergeParams(settings.params); S.trader.p = SM.mergeParams(settings.params); } setTimeout(() => $('saveMsg').textContent = '', 3000); });
+$('btnDefaults').addEventListener('click', () => { settings.params = Object.assign({}, SM.DEFAULT_PARAMS); fillForm(); });
+$('btnResetSim').addEventListener('click', () => { if (!S.book) return; S.trader = new SM.PaperTrader(settings.params); S.signals = []; S.processedMinute = -1; tgSent.clear(); S.processedMinute = Math.max(...S.book.bars.map(b => b.minute), -1); render(); saveState(); });
+$('btnExport').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({ date: S.date, settings: Object.assign({}, settings, { token: '***', tgBot: '***' }), totals: S.book?.totals, series: S.series, signals: S.signals, trades: S.trader?.trades, stats: S.trader?.stats() }, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `smartmoney_${S.date || 'export'}.json`; a.click();
+});
+$('btnTestTg').addEventListener('click', async () => { readForm(); saveSettings(); try { await sendTelegram(`🧪 台指期聰明錢看板測試訊息 ${new Date().toLocaleString('zh-TW')}`); badge('bTg', 'Telegram ✓', 'ok'); alert('Telegram 測試訊息已送出'); } catch (e) { badge('bTg', 'Telegram ✗', 'err'); alert('Telegram 失敗：' + e.message); } });
+$('btnCtx').addEventListener('click', () => { readForm(); saveSettings(); loadContext(); });
+$('btnBtRun').addEventListener('click', () => { readForm(); saveSettings(); runBacktest(); });
+$('btnBtGrid').addEventListener('click', () => { readForm(); saveSettings(); runGrid(); });
+$('btnCheck').addEventListener('click', runChecks);
+
+// ---------------- 啟動 ----------------
+fillForm(); mkCharts();
+(function initDates() { const d = taipeiNow().date; $('btEnd').value = d; $('btStart').value = ymd(new Date(Date.now() - 7 * 864e5)); })();
+setInterval(() => {
+  const n = taipeiNow(); $('clock').textContent = n.str.slice(5, 16);
+  const day = inDaySession(n.minute), night = inNightSession(n.minute);
+  badge('bSession', day ? '日盤 08:45–13:45' : night ? '夜盤 15:00–05:00（僅顯示流量，策略不進場）' : '非交易時段', day ? 'ok' : night ? 'info' : '');
+}, 1000);
+badge('bMode', '待命', ''); badge('bData', settings.token ? 'FinMind Token 已設定' : 'FinMind 未設定', settings.token ? 'info' : 'warn'); badge('bProxy', isCloud() ? '雲端函式' : '本機', ''); badge('bTg', (settings.tgBot && settings.tgChat) ? 'Telegram 已設定' : 'Telegram 未設定', (settings.tgBot && settings.tgChat) ? 'info' : '');
+if (restoreState()) { render(); }
+if (!settings.token) notice('👋 首次使用：到「設定」填入 FinMind <b>付費</b> Token 與 Telegram Bot，再回「即時」按開始；或先按「示範資料」體驗。「檢核」分頁可一鍵驗證權限與引擎。');
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) { navigator.serviceWorker.register('sw.js').catch(() => {}); }
+})();
+</script>
+</body>
+</html>

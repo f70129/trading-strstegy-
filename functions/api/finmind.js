@@ -23,12 +23,15 @@ export async function onRequest(context) {
     return json({ error: 'token required' }, 400, cors);
   }
 
+  const ALLOWED_ENDPOINTS = ['data', 'taiwan_futures_snapshot', 'taiwan_options_snapshot', 'taiwan_stock_tick_snapshot'];
+  const endpointParam = searchParams.get('endpoint') || 'data';
+  const endpoint = ALLOWED_ENDPOINTS.includes(endpointParam) ? endpointParam : 'data';
   const qs = new URLSearchParams();
   for (const [k, v] of searchParams) {
-    if (k !== 'token') qs.set(k, v);
+    if (k !== 'token' && k !== 'endpoint') qs.set(k, v);
   }
 
-  const url = `https://api.finmindtrade.com/api/v4/data?${qs.toString()}`;
+  const url = `https://api.finmindtrade.com/api/v4/${endpoint}?${qs.toString()}`;
   try {
     const r = await fetch(url, {
       headers: {

@@ -5,6 +5,8 @@
 - 上市個股 / 加權指數（TWSE MIS）：  /twse?id=2330  、 /twse?id=t00（加權）
 - 台指期近月（TAIFEX 期交所）：       /taifex?cid=TXF
 - 台股日線 / 期貨 / 清單（FinMind）： /finmind?dataset=...&token=你的FinMindToken
+- 台指期即時快照（FinMind 付費）：   /finmind?endpoint=taiwan_futures_snapshot&data_id=TXF&token=...
+- Telegram 通知備援：                POST /telegram {bot, chat, text}
 - 美股指數（FRED，S&P/NASDAQ/VIX）：  /fred?series_id=SP500&key=你的FREDKey
 - S&P 長歷史（Yahoo ^GSPC）：           /yahoo?symbol=^GSPC&period1=946684800&period2=1767139200
 
@@ -50,16 +52,23 @@ def fetch_twse(stock_id, market="tse"):
         return r.read()
 
 
+FINMIND_ENDPOINTS = ("data", "taiwan_futures_snapshot", "taiwan_options_snapshot", "taiwan_stock_tick_snapshot")
+
+
 def fetch_finmind(query):
     token = query.pop("token", [""])
     token = token[0] if isinstance(token, list) else token
+    endpoint = query.pop("endpoint", ["data"])
+    endpoint = endpoint[0] if isinstance(endpoint, list) else endpoint
+    if endpoint not in FINMIND_ENDPOINTS:
+        endpoint = "data"
     flat = {k: (v[0] if isinstance(v, list) else v) for k, v in query.items()}
     qs = urllib.parse.urlencode(flat)
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
-        f"https://api.finmindtrade.com/api/v4/data?{qs}",
+        f"https://api.finmindtrade.com/api/v4/{endpoint}?{qs}",
         headers=headers,
     )
     try:
@@ -126,6 +135,25 @@ def fetch_yahoo(params):
         return r.read()
 
 
+def send_telegram(bot_token, chat_id, text):
+    """Telegram Bot API sendMessage（瀏覽器通常可直連 api.telegram.org，此為備援）"""
+    if not re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,60}$", bot_token or ""):
+        raise ValueError("bot token 格式錯誤")
+    if not re.match(r"^-?\d{4,20}$", str(chat_id or "")):
+        raise ValueError("chat_id 格式錯誤")
+    body = json.dumps({"chat_id": chat_id, "text": text[:4000], "parse_mode": "HTML",
+                       "disable_web_page_preview": True}).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{bot_token}/sendMessage", data=body,
+        headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        return e.read()
+
+
 def fetch_taifex(cid):
     body = json.dumps({
         "MarketType": "0", "SymbolType": "F", "KindID": "1",
@@ -148,7 +176,7 @@ def fetch_taifex(cid):
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         # 允許 file:// / 公開頁面存取 localhost（Chrome Private Network Access）
         self.send_header("Access-Control-Allow-Private-Network", "true")
@@ -184,10 +212,21 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/finmind":
-            if not params.get("dataset"):
+            endpoint = (params.get("endpoint") or ["data"])[0]
+            if endpoint == "data" and not params.get("dataset"):
                 self._send_json(400, {"error": "dataset required"})
                 return
             self._proxy(lambda: fetch_finmind(dict(params)), "FinMind")
+            return
+
+        if parsed.path == "/telegram":
+            bot = (params.get("bot") or [""])[0]
+            chat = (params.get("chat") or [""])[0]
+            text = (params.get("text") or [""])[0]
+            if not text:
+                self._send_json(400, {"error": "text required"})
+                return
+            self._proxy(lambda: send_telegram(bot, chat, text), "Telegram")
             return
 
         if parsed.path == "/fred":
@@ -215,6 +254,23 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(404, {"error": "not found"})
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != "/telegram":
+            self._send_json(404, {"error": "not found"})
+            return
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            self._send_json(400, {"error": "invalid json"})
+            return
+        text = str(body.get("text") or "")
+        if not text:
+            self._send_json(400, {"error": "text required"})
+            return
+        self._proxy(lambda: send_telegram(body.get("bot", ""), body.get("chat", ""), text), "Telegram")
 
     def _proxy(self, fn, label):
         try:
