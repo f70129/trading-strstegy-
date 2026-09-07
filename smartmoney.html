@@ -9,7 +9,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>台指期聰明錢看板 · 大單/小單即時流向</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/smartmoney-core.js?v=2"></script>
+<script src="js/smartmoney-core.js?v=3"></script>
 <style>
 :root {
   --bg:#0a0e1a; --panel:#111827; --panel2:#0f172a; --border:#1f2d40;
@@ -334,7 +334,9 @@ const LS_KEY = 'sm_settings_v1';
 const LS_STATE = 'sm_state_v1';
 
 // ---------------- 設定 ----------------
+const SETTINGS_VER = 2; // v2：流量來源改為盤中逐筆（舊版 snapshot 設定自動升級）
 const DEFAULT_SETTINGS = {
+  settingsVer: SETTINGS_VER,
   token: '', mode: 'ticks', pollSec: 5, tickPollSec: 15, tickCodes: '', wsCode: '', proxyHost: '',
   tgBot: '', tgChat: '', tgEntry: true, tgExit: true, tgMood: true, tgSummary: false,
   params: Object.assign({}, SM.DEFAULT_PARAMS),
@@ -345,6 +347,12 @@ function loadSettings() {
   try { s = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (_) {}
   const merged = Object.assign({}, DEFAULT_SETTINGS, s);
   merged.params = Object.assign({}, SM.DEFAULT_PARAMS, s.params || {});
+  if (!(s.settingsVer >= 2)) { // 舊版（v1.0）設定：快照取樣抓不到大單 → 升級為逐筆
+    if (merged.mode === 'snapshot') merged.mode = 'ticks';
+    if (!(merged.pollSec < 10)) merged.pollSec = 5;
+    merged.settingsVer = SETTINGS_VER;
+    try { localStorage.setItem(LS_KEY, JSON.stringify(merged)); } catch (_) {}
+  }
   if (!merged.token) { try { merged.token = localStorage.getItem('finmindToken') || ''; } catch (_) {} }
   if (!merged.proxyHost) { try { merged.proxyHost = localStorage.getItem('proxyHost') || ''; } catch (_) {} }
   return merged;
@@ -687,6 +695,7 @@ function startLive() {
   badge('bMode', '即時模式', 'info');
   $('pollInfo').textContent = `每 ${settings.pollSec} 秒輪詢 TXF / MXF / TMF 快照`;
   $('pollInfo').textContent = settings.mode === 'snapshot' ? `每 ${settings.pollSec} 秒輪詢快照（取樣模式）` : `逐筆每 ${settings.tickPollSec} 秒 · 報價快照每 ${settings.pollSec} 秒`;
+  if (settings.mode === 'snapshot') notice('⚠️ 目前是「僅快照取樣」模式，大單幾乎抓不到（實測取樣率約 2%）。請到「設定 → 成交流量來源」改為「盤中逐筆 TaiwanFutOptTick」後再按開始。');
   pollTicks().then(pollOnce);
   S.timer = setInterval(pollOnce, settings.pollSec * 1000);
   if (settings.mode !== 'snapshot') S.tickTimer = setInterval(pollTicks, settings.tickPollSec * 1000);
@@ -1076,7 +1085,12 @@ document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('cl
 $('btnStart').addEventListener('click', () => { readForm(); saveSettings(); if (!settings.token) { notice('請先到「設定」填入 FinMind <b>付費</b> Token，或按「示範資料」。'); document.querySelector('[data-page=set]').click(); return; } startLive(); });
 $('btnStop').addEventListener('click', () => { stopAll(); $('pollInfo').textContent = '已停止'; });
 $('btnDemo').addEventListener('click', () => { readForm(); startDemo(); });
-$('btnSave').addEventListener('click', () => { readForm(); saveSettings(); fillForm(); $('saveMsg').textContent = '已儲存（僅存在此瀏覽器）'; if (S.book) { S.book.params = SM.mergeParams(settings.params); S.trader.p = SM.mergeParams(settings.params); } setTimeout(() => $('saveMsg').textContent = '', 3000); });
+$('btnSave').addEventListener('click', () => {
+  readForm(); saveSettings(); fillForm(); $('saveMsg').textContent = '已儲存（僅存在此瀏覽器）';
+  if (S.book) { S.book.params = SM.mergeParams(settings.params); S.trader.p = SM.mergeParams(settings.params); }
+  if (S.running && !S.demo) { startLive(); $('saveMsg').textContent = '已儲存，並以新設定重新啟動即時輪詢'; }
+  setTimeout(() => $('saveMsg').textContent = '', 4000);
+});
 $('btnDefaults').addEventListener('click', () => { settings.params = Object.assign({}, SM.DEFAULT_PARAMS); fillForm(); });
 $('btnResetSim').addEventListener('click', () => { if (!S.book) return; S.trader = new SM.PaperTrader(settings.params); S.signals = []; S.processedMinute = -1; tgSent.clear(); S.processedMinute = Math.max(...S.book.bars.map(b => b.minute), -1); render(); saveState(); });
 $('btnExport').addEventListener('click', () => {
