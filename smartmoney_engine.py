@@ -576,6 +576,83 @@ def snapshot_to_trades(prev: Optional[dict], snap: dict, product: str, minute: O
     return out
 
 
+# ---------------------------------------------------------------- FinMind 盤中逐筆（dataset=TaiwanFutOptTick, data_id=TXFR1）
+def to_list(v) -> list:
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        t = v.strip()
+        if t.startswith("["):
+            try:
+                a = json.loads(t)
+                if isinstance(a, list):
+                    return a
+            except Exception:  # noqa: BLE001
+                pass
+        if "," in t:
+            return [float(x.strip()) for x in t.replace("[", "").replace("]", "").split(",") if x.strip()]
+        return [float(t)] if t else []
+    if v is None:
+        return []
+    return [float(v)]
+
+
+def parse_futopt_time(date_str, time_str, fallback_minute=0) -> dict:
+    d = str(date_str or "")[:10]
+    t = str("" if time_str is None else time_str).strip()
+    if not t and re.search(r"\d{2}:\d{2}", str(date_str)):
+        return parse_tick_time(date_str, fallback_minute)
+    if re.match(r"^\d{5,9}$", t):
+        t = t.rjust(6 if len(t) <= 6 else 9, "0")
+        t = f"{t[0:2]}:{t[2:4]}:{t[4:6]}" + (("." + t[6:]) if len(t) > 6 else "")
+    return parse_tick_time(f"{d} {t}", fallback_minute)
+
+
+def _row_key(r: dict, i: int) -> str:
+    return f"{r.get('Time', r.get('time', ''))}|{i}"
+
+
+def parse_futopt_tick_rows(rows: list, product: str, cursor: Optional[dict], day_session_only=False, start="08:45", end="13:45") -> dict:
+    """每列 {date, Time, Close(list|值|字串), Volume(...), TickType} → trades；cursor 去重（累加式回傳）"""
+    c = {"n": 0, "key": None, "lastPrice": None, "lastSide": 0}
+    c.update(cursor or {})
+    lst = rows if isinstance(rows, list) else []
+    prod = normalize_product(product)
+    start_min, end_min = hhmm_to_min(start), hhmm_to_min(end)
+    frm = c["n"]
+    if len(lst) < c["n"] or (c["n"] > 0 and c["key"] is not None and _row_key(lst[c["n"] - 1] if c["n"] - 1 < len(lst) else {}, c["n"] - 1) != c["key"]):
+        frm = 0
+    if frm == 0:
+        c["lastPrice"], c["lastSide"] = None, 0
+    trades = []
+    for i in range(frm, len(lst)):
+        r = lst[i]
+        closes = to_list(r.get("Close", r.get("close", r.get("price", r.get("deal_price")))))
+        vols = to_list(r.get("Volume", r.get("volume", r.get("qty", r.get("deal_volume")))))
+        tts = to_list(r.get("TickType", r.get("tick_type", 0)))
+        t = parse_futopt_time(r.get("date"), r.get("Time", r.get("time")), 0)
+        if day_session_only and (t["minute"] < start_min or t["minute"] > end_min):
+            continue
+        n = max(len(closes), len(vols))
+        for k in range(n):
+            try:
+                price = float(closes[min(k, len(closes) - 1)])
+                volume = float(vols[min(k, len(vols) - 1)])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if not math.isfinite(price) or not volume > 0:
+                continue
+            tt = float(tts[min(k, len(tts) - 1)]) if tts else 0
+            side = 1 if tt == 1 else -1 if tt == 2 else 0
+            if not side:
+                side = tick_side(price, c["lastPrice"], c["lastSide"])
+            c["lastPrice"], c["lastSide"] = price, side
+            trades.append({"ms": t["ms"], "minute": t["minute"], "product": prod, "price": price, "volume": volume, "side": side})
+    c["n"] = len(lst)
+    c["key"] = _row_key(lst[-1], len(lst) - 1) if lst else None
+    return {"trades": trades, "cursor": c}
+
+
 # ---------------------------------------------------------------- 合成資料（與 JS 完全一致）
 def mulberry32(seed: int):
     a = seed & 0xFFFFFFFF
@@ -791,19 +868,29 @@ def cmd_grid(args, params):
     print("已輸出 data/smartmoney_grid.json（⚠️ 注意過度配適：選穩定區間而非單一最佳值）")
 
 
-def pick_near(rows: List[dict], prefix: str) -> Optional[dict]:
-    lst = [r for r in rows or [] if str(r.get("futures_id", "")).upper().startswith(prefix) and "/" not in str(r.get("futures_id", ""))]
+def pick_near(rows: List[dict], prefix) -> Optional[dict]:
+    prefixes = list(prefix) if isinstance(prefix, (list, tuple)) else [prefix]
+    if "MXF" in prefixes or "MTX" in prefixes:
+        prefixes = sorted(set(prefixes) | {"MXF", "MTX"})
+    lst = [r for r in rows or [] if any(str(r.get("futures_id", "")).upper().startswith(p) for p in prefixes) and "/" not in str(r.get("futures_id", ""))]
     if not lst:
         return None
     lst.sort(key=lambda r: -float(r.get("total_volume") or 0))
     return lst[0]
 
 
+TICK_CODES = {"TX": "TXFR1", "MTX": "MXFR1", "TMF": "TMFR1"}
+
+
 def cmd_live(args, params):
-    products = [("TX", "TXF"), ("MTX", "MXF"), ("TMF", "TMF")]
+    products = [("TX", ["TXF"]), ("MTX", ["MXF", "MTX"]), ("TMF", ["TMF"])]
     book = FlowBook(params)
     trader = PaperTrader(params)
     snaps: Dict[str, dict] = {}
+    tick_cursor: Dict[str, dict] = {}
+    tick_ok: Dict[str, bool] = {}
+    tick_logged: Dict[str, bool] = {}
+    use_ticks = not args.snapshot_only
     processed = -1
     last_mood = None
     signals: List[dict] = []
@@ -816,22 +903,50 @@ def cmd_live(args, params):
         cur_min = now.hour * 60 + now.minute
         if now.strftime("%Y-%m-%d") != day:
             day = now.strftime("%Y-%m-%d"); book = FlowBook(params); trader = PaperTrader(params); snaps = {}; processed = -1; signals = []
+            tick_cursor = {}; tick_ok = {}
         quotes = {}
         any_ok = False
-        for key, snap_id in products:
+        # 1) 盤中逐筆（完整成交 + TickType）
+        if use_ticks:
+            for key, _ in products:
+                code = TICK_CODES[key]
+                try:
+                    rows = finmind("data", {"dataset": "TaiwanFutOptTick", "data_id": code, "start_date": day}, timeout=90, retries=1)
+                    if rows and not tick_logged.get(key):
+                        tick_logged[key] = True
+                        print(f"{key} 逐筆 {code} 首列原始：{json.dumps(rows[0], ensure_ascii=False)[:300]}；共 {len(rows)} 列")
+                    res = parse_futopt_tick_rows(rows, key, tick_cursor.get(key))
+                    tick_cursor[key] = res["cursor"]
+                    if res["trades"]:
+                        book.add_trades(res["trades"])
+                        if key == "TX":
+                            cur_min = max(cur_min, res["trades"][-1]["minute"]) if res["trades"][-1]["minute"] <= cur_min else cur_min
+                        any_ok = True
+                    tick_ok[key] = bool(rows)
+                except Exception as e:  # noqa: BLE001
+                    if not tick_logged.get(key + ":err"):
+                        tick_logged[key + ":err"] = True
+                        print(f"[{now:%H:%M:%S}] {key} 逐筆 {code} 失敗：{e}（改用快照取樣）")
+        # 2) 報價快照（逐筆正常時只更新報價，不重複累計流量）
+        for key, snap_ids in products:
             try:
-                rows = finmind("taiwan_futures_snapshot", {"data_id": snap_id}, timeout=15, retries=1)
-                row = pick_near(rows, snap_id)
+                row = None
+                for snap_id in snap_ids:
+                    rows = finmind("taiwan_futures_snapshot", {"data_id": snap_id}, timeout=15, retries=1)
+                    row = pick_near(rows, snap_ids)
+                    if row is not None:
+                        break
                 if row is None:
                     continue
                 if first_dump:
                     print("首筆快照原始欄位：", json.dumps(row, ensure_ascii=False)[:600]); first_dump = False
                 any_ok = True
                 t = parse_tick_time(row.get("date"), cur_min)
-                if key == "TX" and t["minute"]:
+                if key == "TX" and t["minute"] and not tick_ok.get("TX"):
                     cur_min = t["minute"]
-                trades = snapshot_to_trades(snaps.get(key), row, key, minute=t["minute"] or cur_min)
-                book.add_trades(trades)
+                if not tick_ok.get(key):
+                    trades = snapshot_to_trades(snaps.get(key), row, key, minute=t["minute"] or cur_min)
+                    book.add_trades(trades)
                 snaps[key] = row
                 quotes[key] = {"price": row.get("close"), "chg": row.get("change_price"), "tv": row.get("total_volume"), "lastVol": row.get("volume"), "tick": row.get("TickType", row.get("tick_type")), "time": row.get("date"), "id": row.get("futures_id")}
             except Exception as e:  # noqa: BLE001
@@ -873,7 +988,8 @@ def cmd_live(args, params):
             with open("data/smartmoney_live.json", "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False)
             ind = series[-1]
-            print(f"[{now:%H:%M:%S}] TX {quotes.get('TX', {}).get('price')} SMI {ind['smi']:+.2f} 大單淨 {book.totals['bigBuy'] - book.totals['bigSell']:+.0f} "
+            src = "逐筆" if tick_ok.get("TX") else "快照取樣"
+            print(f"[{now:%H:%M:%S}] [{src}] TX {quotes.get('TX', {}).get('price')} SMI {ind['smi']:+.2f} 大單淨 {book.totals['bigBuy'] - book.totals['bigSell']:+.0f} "
                   f"散戶淨 {book.totals['smallBuy'] - book.totals['smallSell']:+.1f} 心態 {mood['score']} {mood['label']} 模擬 {trader.equity:+.1f}")
         if args.once:
             break
@@ -902,6 +1018,17 @@ def cmd_selftest(_args, _params) -> int:
     ok("快照差量：取樣 5 口 + 未取樣 95 口(區間均價偏買)", len(st) == 2 and st[0]["volume"] == 5 and st[0]["side"] == 1 and st[1]["volume"] == 95 and st[1]["side"] == 1 and st[1]["forceSmall"])
     cur2 = dict(cur, total_amount=prev["total_amount"] + 100 * 24000.1 * 200)
     ok("未取樣量區間均價偏賣 → -1", snapshot_to_trades(prev, cur2, "TXF")[1]["side"] == -1)
+    fo_rows = [
+        {"date": "2026-09-07", "Time": "08:45:00.123", "Close": [47300, 47301], "Volume": [3, 12], "TickType": 1},
+        {"date": "2026-09-07", "Time": "08:45:01.500", "Close": "[47299]", "Volume": "[2]", "TickType": 2},
+        {"date": "2026-09-07", "Time": "084502", "Close": 47299, "Volume": 1, "TickType": 0},
+    ]
+    r1 = parse_futopt_tick_rows(fo_rows, "TXFR1", None)
+    ok("逐筆解析：三種格式共 4 筆", len(r1["trades"]) == 4 and r1["trades"][1]["volume"] == 12 and r1["trades"][1]["side"] == 1 and r1["trades"][3]["side"] == -1)
+    r2 = parse_futopt_tick_rows(fo_rows + [{"date": "2026-09-07", "Time": "08:45:03", "Close": [47305], "Volume": [20], "TickType": 1}], "TXFR1", r1["cursor"])
+    ok("逐筆解析：累加式只處理新增列", len(r2["trades"]) == 1 and r2["trades"][0]["volume"] == 20 and r2["cursor"]["n"] == 4)
+    ok("逐筆解析：列數變少重置", len(parse_futopt_tick_rows(fo_rows[:1], "TXFR1", r2["cursor"])["trades"]) == 2)
+    ok("時間格式 HHMMSSmmm", parse_futopt_time("2026-09-07", "110759569")["ms"] == ((11 * 60 + 7) * 60 + 59) * 1000 + 569)
     # 合成資料
     syn = synthetic_day(7)
     trades = rows_to_trades(syn["rows"])
@@ -930,6 +1057,11 @@ def cmd_selftest(_args, _params) -> int:
                              "lastSmi": rr["series"][-1]["smi"], "totals": {k: js_round(v, 3) for k, v in FlowBookTotals(tr, {}).items()}}
     days = [{"date": f"d{s}", "trades": rows_to_trades(synthetic_day(s)["rows"])} for s in (1, 2, 3)]
     gg = grid_search(days, {"bigLot": [5, 10], "windowMin": [5, 10], "zEntry": [1, 1.5], "stopPts": [30], "targetPts": [60]}, {})
+    parity["futopt"] = parse_futopt_tick_rows([
+        {"date": "2026-09-07", "Time": "08:45:00.123", "Close": [47300, 47301], "Volume": [3, 12], "TickType": 1},
+        {"date": "2026-09-07", "Time": "08:45:01.500", "Close": "[47299]", "Volume": "[2]", "TickType": 2},
+        {"date": "2026-09-07", "Time": "084502", "Close": 47299, "Volume": 1, "TickType": 0},
+    ], "TXFR1", None)["trades"]
     parity["grid"] = [{"params": x["params"], "pnlPts": x["pnlPts"], "trades": x["trades"], "maxDD": x["maxDD"]} for x in gg]
     os.makedirs("data", exist_ok=True)
     with open(os.environ.get("SM_PARITY_OUT", "data/parity_py.json"), "w", encoding="utf-8") as f:
@@ -946,6 +1078,7 @@ def main():
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--once", action="store_true", help="live 只跑一輪（觀察原始欄位）")
     ap.add_argument("--interval", type=int, default=10)
+    ap.add_argument("--snapshot-only", action="store_true", help="live 不用逐筆 TaiwanFutOptTick，只用快照取樣（不建議）")
     ap.add_argument("--telegram-test", action="store_true")
     ap.add_argument("--params", help="JSON 字串覆寫參數，例 '{\"bigLot\":20,\"zEntry\":2}'")
     ap.add_argument("--params-file", help="從 JSON 檔（例 data/smartmoney_grid.json 的 results[0].params）讀參數")

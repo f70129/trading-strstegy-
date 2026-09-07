@@ -4,7 +4,10 @@
 （瀏覽器與 Node 共用的核心引擎）與 `smartmoney_engine.py`（Python 版，離線回測 / 常駐推播）。
 
 > 資料來源全部是 **FinMind 付費（sponsor）方案**：
-> - 即時：`taiwan_futures_snapshot`（約 10 秒更新，含 `TickType` 內外盤、最後一筆成交口數、累積量 / 金額、最佳買賣價）
+> - **盤中逐筆（主要流量來源）**：`dataset=TaiwanFutOptTick&data_id=TXFR1`（近月連續代碼 R1；小台 `MXFR1`、微台 `TMFR1`），
+>   回傳當日至今每筆成交的價格、口數與 `TickType`，看板每 15 秒輪詢一次並只處理新增列。
+> - 報價快照：`taiwan_futures_snapshot`（含最佳買賣價、累積量；只揭露最後一筆成交口數，**僅用來顯示報價**，
+>   逐筆取不到時才退回快照取樣）
 > - 歷史逐筆：`TaiwanFuturesTick`（每筆成交的價格與口數，TX / MTX / TMF）
 > - 逐筆 WebSocket：`wss://api.finmindtrade.com/api/v4/websocket/taiwan_futopt_price_tick`（實驗性，訊息欄位以現場為準）
 > - 盤後底牌（免費）：`TaiwanFuturesInstitutionalInvestors`、`TaiwanFuturesOpenInterestLargeTraders`
@@ -40,7 +43,8 @@ export TELEGRAM_CHAT_ID=123456789        # 選用
 
 python smartmoney_engine.py --selftest                       # 單元測試（免網路）
 python smartmoney_engine.py --live --once                    # 拉一次快照，印出原始欄位（首次務必看）
-python smartmoney_engine.py --live --interval 10             # 盤中常駐：訊號 → Telegram，狀態寫 data/smartmoney_live.json
+python smartmoney_engine.py --live --interval 10             # 盤中常駐（逐筆 TaiwanFutOptTick + 報價快照）：訊號 → Telegram，狀態寫 data/smartmoney_live.json
+python smartmoney_engine.py --live --snapshot-only           # 只用快照取樣（不建議，大單抓不到）
 python smartmoney_engine.py --backtest 2026-08-01 2026-09-05 # 逐筆回測 → data/smartmoney_backtest.json
 python smartmoney_engine.py --grid 2026-08-01 2026-09-05     # 108 組網格 → data/smartmoney_grid.json
 python smartmoney_engine.py --live --params-file data/smartmoney_grid.json   # 用網格最佳參數跑即時
@@ -66,8 +70,9 @@ python smartmoney_engine.py --live --params-file data/smartmoney_grid.json   # �
 | 資料 | 判定 |
 |---|---|
 | 即時快照 | `TickType` 1 = 外盤（主動買）、2 = 內盤（主動賣）；0 時用成交價 vs 最佳買賣價；再無則 Tick Rule |
-| 快照未取樣量 | 兩次快照間 Δ累積金額 / Δ累積量 = 區間均價，高於中價 → 買方主導 |
-| 歷史逐筆 / WebSocket | Tick Rule（上漲 tick = 買、下跌 tick = 賣、平盤沿用上一筆） |
+| 盤中逐筆 TaiwanFutOptTick | `TickType` 1 = 外盤買、2 = 內盤賣；0 時 Tick Rule |
+| 快照未取樣量（備援） | 兩次快照間 Δ累積金額 / Δ累積量 = 區間均價，高於中價 → 買方主導 |
+| 歷史逐筆 TaiwanFuturesTick / WebSocket | Tick Rule（上漲 tick = 買、下跌 tick = 賣、平盤沿用上一筆） |
 
 ### 指標
 ```
@@ -91,8 +96,8 @@ SMI             = zBig − 0.5 × zRetail                   （散戶反向）
 
 | 項目 | 方式 | 結果 |
 |---|---|---|
-| 引擎單元測試（JS） | `node tests/smartmoney-core.test.js` | 29 項全部通過 |
-| 引擎單元測試（Python） | `python smartmoney_engine.py --selftest` | 15 項全部通過 |
+| 引擎單元測試（JS） | `node tests/smartmoney-core.test.js` | 35 項全部通過 |
+| 引擎單元測試（Python） | `python smartmoney_engine.py --selftest` | 19 項全部通過 |
 | **跨語言一致性** | `node tests/parity.js`：同一組合成逐筆（6 個種子 + 8 組網格），JS 與 Python 的交易數、損益、SMI、排名 | 完全相同 |
 | 合成資料訊號偵測 | 大單淨流方向 vs 隱含趨勢一致率 | 82%（門檻 58%） |
 | 看板端對端（Playwright + 模擬 FinMind / Telegram 伺服器） | 檢核頁 / 即時輪詢 40 輪 / 重新整理還原狀態 / 盤後底牌 / 模擬頁 / 示範資料回測 / 108 組網格 / 套用參數 / 逐筆回測 | 全部通過，0 個 JS 錯誤 |
@@ -101,11 +106,13 @@ SMI             = zBig − 0.5 × zRetail                   （散戶反向）
 | Telegram 推播格式 | 模擬伺服器收到進場 / 出場 / 心態轉變 / 30 分摘要 | 通過 |
 | 代理函式 | Netlify / Cloudflare / local-proxy.py 的 `endpoint` 白名單、Telegram 參數驗證 | 通過 |
 
-**未能在開發環境驗證（網路被封鎖，需你在本機第一次執行時確認）：**
-1. FinMind 快照真實欄位名稱是否與官方 python 套件一致（`TickType`、`total_amount`、`buy_price`…）。
-   看板「檢核」會把首筆快照原始內容印出來；`python smartmoney_engine.py --live --once` 也會。
-2. `MXF` / `TMF` 是否能用快照端點取得（官方文件寫「目前支援台指期」）。若取不到，小台 / 微台流量會缺失，
-   看板會以警告顯示，但大單分析（TX）仍可運作。
+**已由使用者實機確認（2026-09-07 盤中）：** 快照 `TXF`（回傳 `TXFR1`）與 `TMF` 正常、`TickType` 存在；`MXF` 無資料，
+看板已改為依序嘗試 `MXF` → `MTX`。
+
+**尚未實機驗證（開發環境網路被封鎖）：**
+1. `TaiwanFutOptTick` 盤中逐筆的列格式（`Close` / `Volume` 是陣列或單值、`Time` 格式）。解析器已同時支援陣列、
+   單值、JSON 字串、`HH:MM:SS.fff` 與 `HHMMSSfff`；「檢核」與事件日誌會印出首列原始內容。
+2. 小台逐筆代碼是否為 `MXFR1`；若回傳 0 列，看板會查 `TaiwanFutOptTickInfo` 自動挑選，也可手動填。
 3. WebSocket 逐筆的訊息格式與是否需要 token；看板會把第一筆原始訊息寫進「檢核 → 事件日誌」。
 4. 策略在真實資料上的績效 —— 合成資料只驗證邏輯正確，**不代表實盤期望值**。請先用 `--grid` 跑至少
    20 個交易日，且只挑「前 20 名中穩定出現、正報酬日 ≥ 60%」的參數區間。
@@ -113,8 +120,10 @@ SMI             = zBig − 0.5 × zRetail                   （散戶反向）
 ---
 
 ## 4. 已知限制與建議
-- **快照模式是取樣估計**：FinMind 快照約 10 秒一筆，只揭露「最後一筆成交」的口數與方向，其餘量歸入
-  「未取樣」（僅算整體方向，不算大小單）。看板會顯示取樣率。要完整逐筆請用 WebSocket 模式或盤後逐筆回測。
+- **實測教訓（2026-09-07 盤中）**：只用快照取樣時，18 分鐘只取到 65 筆小單、大單 0 筆、取樣率 2%，
+  「樣本不足」永遠不會消失。因此 v1.1 起預設改用 `TaiwanFutOptTick` 盤中逐筆，快照只負責報價。
+  若「檢核」顯示逐筆回傳 0 列，請看 `TaiwanFutOptTickInfo` 列出的代碼，到「設定 → 逐筆代碼」填入正確代碼。
+- 逐筆端點每次回傳「當日至今全部」，大台一天可達數萬列；看板預設 15 秒輪詢並增量處理，手機請調到 30 秒以上。
 - 一分 K 收完才會出訊號（與回測邏輯一致，避免盤中 / 回測落差）。
 - 模擬盤不含滑價分布、漲跌停、流動性；成本以 1.5 點粗估。
 - 日盤限定（08:45–13:45）；夜盤只顯示流量、策略不進場。
