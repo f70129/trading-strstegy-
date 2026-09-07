@@ -9,7 +9,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>台指期聰明錢看板 · 大單/小單即時流向</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/smartmoney-core.js?v=7"></script>
+<script src="js/smartmoney-core.js?v=8"></script>
 <style>
 :root {
   --bg:#0a0e1a; --panel:#111827; --panel2:#0f172a; --border:#1f2d40;
@@ -159,7 +159,7 @@ pre.log{background:#050810;border:1px solid var(--border);border-radius:8px;padd
           <tr><td>🐋 大單（大台 ≥<span id="bigLotLbl">10</span> 口）</td><td id="fBigB">0</td><td id="fBigS">0</td><td id="fBigN">0</td><td id="fBigT">0</td></tr>
           <tr><td>🐬 中單（大台 <span id="midLotLbl">3–9</span> 口）</td><td id="fMidB">0</td><td id="fMidS">0</td><td id="fMidN">0</td><td>—</td></tr>
           <tr><td>🐟 小單（散戶：小台/微台/大台1-2口）</td><td id="fSmB">0</td><td id="fSmS">0</td><td id="fSmN">0</td><td id="fSmT">0</td></tr>
-          <tr><td class="muted">未取樣量（快照模式）</td><td id="fUnB" class="muted">0</td><td id="fUnS" class="muted">0</td><td class="muted">—</td><td id="fCov" class="muted">—</td></tr>
+          <tr><td class="muted" colspan="5" id="flowSrcRow">大小單資料來源：盤中逐筆（收盤或盤前為 0，屬正常）</td></tr>
         </tbody>
       </table></div>
       <div class="note" id="flowNote">流量來源：盤中逐筆 TaiwanFutOptTick（每筆成交口數 + TickType 外盤=買 / 內盤=賣，無則 Tick Rule）。若逐筆取不到才退回快照取樣，此時「未取樣量」會很大、大單統計嚴重低估。</div>
@@ -617,20 +617,18 @@ async function pollOnce() {
       anyOk = true;
       const t = SM.parseTickTime(row.date, now.minute);
       if (pr.key === 'TX' && t.minute) minute = t.minute;
-      const prev = S.snaps[pr.key];
-      // 逐筆來源正常時，流量全部來自逐筆；快照只更新報價，避免重複計算
-      if (!S.tickOk[pr.key]) {
-        const trades = SM.snapshotToTrades(prev, row, pr.key, { minute: t.minute || now.minute });
-        S.book.addTrades(trades);
-      }
+      // 快照只負責顯示報價；大小單流量一律來自盤中逐筆（快照取樣率過低、會誤導）
       S.snaps[pr.key] = row;
       S.quotes[pr.key] = { price: Number(row.close), chg: Number(row.change_price), chgRate: Number(row.change_rate), tv: Number(row.total_volume), lastVol: Number(row.volume), tick: Number(row.TickType ?? row.tick_type), bid: Number(row.buy_price), ask: Number(row.sell_price), time: row.date, id: row.futures_id };
     } catch (e) { errs.push(`${pr.key}: ${e.message}`); }
   }
   if (anyOk) {
     const tickN = Object.values(S.tickCount).reduce((a, b) => a + b, 0);
-    badge('bData', S.tickOk.TX ? `逐筆 ✓ ${fmt(tickN)} 筆 · ${S.tickSrc.TX === 'TaiwanFuturesTick' ? '明細表' : 'FutOptTick'} · 快照 ${S.quotes.TX?.time?.slice(11, 19) || ''}` : `快照 ✓ ${S.quotes.TX?.time?.slice(11, 19) || ''}（取樣）`, S.tickOk.TX ? 'ok' : 'warn');
-    if (settings.mode !== 'snapshot' && !S.tickOk.TX && S._tickErr) notice(`⚠️ <b>盤中逐筆尚未取得，目前只用快照取樣，大單統計會嚴重低估。</b><br>原因：${S._tickErr}<br>請把這個黃框截圖給開發者；或按「🔍 逐筆診斷」看原始回傳。`);
+    const daySession = inDaySession(minute);
+    badge('bData', S.tickOk.TX ? `逐筆 ✓ ${fmt(tickN)} 筆 · ${S.tickSrc.TX === 'TaiwanFuturesTick' ? '明細表' : 'FutOptTick'}` : (daySession ? '報價 ✓ · 等逐筆' : '報價 ✓ · 收盤'), S.tickOk.TX ? 'ok' : daySession ? 'warn' : 'info');
+    if (S.tickOk.TX) notice('');
+    else if (!daySession) notice('🕒 <b>目前非日盤交易時段（08:45–13:45）</b>，盤中逐筆沒有即時資料，大小單無法統計，這是正常的。<br>報價仍會顯示最新收盤。想現在就看大單/小單分析，請到「<b>回測</b>」分頁選一個<b>過去交易日</b>跑逐筆回測。');
+    else if (S._tickErr) notice(`⚠️ <b>盤中逐筆尚未取得</b>（大小單暫時無法統計）。原因：${S._tickErr}<br>可按「🔍 逐筆診斷」看原始回傳並截圖給開發者。`);
     else notice('');
     if (inDaySession(minute)) processBars(minute); else { S.series = SM.computeSeries(S.book.bars, settings.params); checkMood(); }
     render(); saveState();
@@ -874,9 +872,7 @@ function render() {
   set('fBigB', t.bigBuy); set('fBigS', t.bigSell); $('fBigN').textContent = signed(t.bigBuy - t.bigSell); $('fBigN').className = cls(t.bigBuy - t.bigSell); set('fBigT', t.bigTrades);
   set('fMidB', t.midBuy); set('fMidS', t.midSell); $('fMidN').textContent = signed(t.midBuy - t.midSell); $('fMidN').className = cls(t.midBuy - t.midSell);
   set('fSmB', t.smallBuy, 1); set('fSmS', t.smallSell, 1); $('fSmN').textContent = signed(t.smallBuy - t.smallSell, 1); $('fSmN').className = cls(t.smallBuy - t.smallSell); set('fSmT', t.smallTrades);
-  set('fUnB', t.unsBuy, 0); set('fUnS', t.unsSell, 0);
-  const sampled = t.bigBuy + t.bigSell + t.midBuy + t.midSell + t.smallBuy + t.smallSell, uns = t.unsBuy + t.unsSell;
-  $('fCov').textContent = sampled + uns > 0 ? `取樣率 ${fmt(sampled / (sampled + uns) * 100, 0)}%` : '—';
+  { const srcRow = $('flowSrcRow'); if (srcRow) srcRow.textContent = S.tickOk?.TX ? `大小單資料來源：盤中逐筆 ${S.tickSrc?.TX === 'TaiwanFuturesTick' ? '明細表' : 'FutOptTick'}（累計 ${fmt(Object.values(S.tickCount || {}).reduce((a, b) => a + b, 0))} 筆）` : '大小單資料來源：盤中逐筆（收盤或盤前為 0，屬正常；歷史分析請用「回測」）'; }
   // 圖
   if (chPrice) {
     const labels = S.series.map(s => s.time);
