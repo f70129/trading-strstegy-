@@ -9,7 +9,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>台指期聰明錢看板 · 大單/小單即時流向</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/smartmoney-core.js?v=9"></script>
+<script src="js/smartmoney-core.js?v=10"></script>
 <style>
 :root {
   --bg:#0a0e1a; --panel:#111827; --panel2:#0f172a; --border:#1f2d40;
@@ -638,7 +638,10 @@ async function pollOnce() {
     notice(`即時快照取得失敗：${msg}<br>請確認 FinMind Token 為<b>付費(sponsor)</b>方案、已在「設定」填入，且網路可連 api.finmindtrade.com（或本機代理 / Netlify 函式）。<br>可先按「示範資料」看操作流程。`);
     log('快照失敗：' + msg, 'ERR');
   }
-  if (errs.length && anyOk) log('部分商品失敗：' + errs.join('；'), 'WARN');
+  if (errs.length && anyOk) { // 小台/微台報價快照常態性缺（FinMind 無提供），只在錯誤內容改變時提示一次，避免洗版
+    const key = errs.join('；');
+    if (S._lastQuoteErr !== key) { S._lastQuoteErr = key; log('報價快照部分商品無資料（不影響大小單分析，流量來自逐筆）：' + key, 'WARN'); }
+  } else if (!errs.length) { S._lastQuoteErr = ''; }
 }
 /** 期貨逐筆：dataset=TaiwanFuturesTick&data_id=TX/MTX/TMF（回傳當日至今全部逐筆；FinMind 期貨逐筆唯一正確資料集）
  *  先用 start_date+end_date，0 列再試 date 參數。無 TickType → Tick Rule。 */
