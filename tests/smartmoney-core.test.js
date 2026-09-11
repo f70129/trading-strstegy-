@@ -74,6 +74,27 @@ ok('結算後改次月 2026-09-17 15:00 = TXFJ6', SM.nearMonthContract('TXF', ne
 ok('12月結算後跨年 = MXFA7', SM.nearMonthContract('MXF', new Date(2026, 11, 20)) === 'MXFA7');
 ok('到期排序鍵遞增', SM.contractExpiryKey('TXFI6') < SM.contractExpiryKey('TXFJ6') && SM.contractExpiryKey('TXFJ6') < SM.contractExpiryKey('TXFC7'));
 
+// 漲跌家數（市場廣度）解析與過濾
+{
+  const rows = [
+    { date: '2026-09-11 09:01:05', '上漲家數': 800, '下跌家數': 120, '指數': 24000 },
+    { date: '2026-09-11 09:01:10', UpNum: 790, DownNum: 130 },
+    { date: '2026-09-11 09:02:00', rise: 600, fall: 300 },
+    { date: '2026-09-11 09:03:00', TradeVolume: 123, '漲跌家數': 450 },
+  ];
+  const b = SM.parseBreadthRows(rows);
+  ok('漲跌家數解析：中文/英文/直接淨值欄位', b.byMinute[541] === 660 && b.byMinute[542] === 300 && b.byMinute[543] === 450);
+  const trB = SM.rowsToTrades(SM.syntheticDay(7).rows);
+  const barsB = SM.buildBars(trB, {});
+  const blockLong = {}; barsB.forEach(x => blockLong[x.minute] = 9999);
+  const rL = SM.backtestBars(barsB, SM.mergeParams({ breadthFilter: true, breadthLimit: 700 }), blockLong);
+  ok('漲跌家數過濾：淨漲家數過多 → 不做多', rL.trades.filter(t => t.side > 0).length === 0);
+  const blockShort = {}; barsB.forEach(x => blockShort[x.minute] = -9999);
+  const rS = SM.backtestBars(barsB, SM.mergeParams({ breadthFilter: true, breadthLimit: 700 }), blockShort);
+  ok('漲跌家數過濾：淨跌家數過多 → 不做空', rS.trades.filter(t => t.side < 0).length === 0);
+  ok('漲跌家數過濾：關閉時不影響', SM.backtestBars(barsB, {}, blockLong).trades.length === SM.backtestDay(trB, {}).trades.length);
+}
+
 // 合成資料 → 回測
 const syn = SM.syntheticDay(7);
 const trades = SM.rowsToTrades(syn.rows);

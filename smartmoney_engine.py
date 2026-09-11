@@ -48,6 +48,8 @@ DEFAULT_PARAMS = {
     "costPts": 1.5, "cooldownMin": 5, "maxTradesPerDay": 6,
     "sessionStart": "08:45", "sessionEnd": "13:45", "entryCutoff": "13:00", "flatAt": "13:40",
     "minBarsForZ": 10,
+    "breadthFilter": False,
+    "breadthLimit": 700,
 }
 
 
@@ -277,14 +279,22 @@ def _std(a: List[float]) -> float:
     return math.sqrt(sum((x - m) * (x - m) for x in a) / (len(a) - 1))
 
 
-def compute_series(bars: List[dict], params: Optional[dict] = None) -> List[dict]:
+def compute_series(bars: List[dict], params: Optional[dict] = None, breadth_by_min: Optional[dict] = None) -> List[dict]:
     p = merge_params(params)
     W = max(1, int(p["windowMin"]))
     out = []
     big_arr: List[float] = []
     ret_arr: List[float] = []
     cum_big = cum_ret = cum_amt = cum_vol = 0.0
+    last_breadth = None
     for i, b in enumerate(bars):
+        if breadth_by_min is not None:
+            v = breadth_by_min.get(b["minute"])
+            if v is not None:
+                try:
+                    last_breadth = float(v)
+                except (TypeError, ValueError):
+                    pass
         big_net = b["bigBuy"] - b["bigSell"]
         ret_net = b["smallBuy"] - b["smallSell"]
         big_arr.append(big_net); ret_arr.append(ret_net)
@@ -306,6 +316,7 @@ def compute_series(bars: List[dict], params: Optional[dict] = None) -> List[dict
             "zBig": js_round(z_big, 4), "zRetail": js_round(z_ret, 4), "smi": js_round(smi, 4),
             "cumBig": js_round(cum_big, 3), "cumRetail": js_round(cum_ret, 3),
             "vwap": js_round(cum_amt / cum_vol, 2) if cum_vol > 0 else b["close"],
+            "breadth": last_breadth,
         })
     return out
 
@@ -412,6 +423,11 @@ class PaperTrader:
                 return ev
             if side < 0 and px > ind["vwap"]:
                 return ev
+        if p["breadthFilter"] and p["breadthLimit"] > 0 and ind.get("breadth") is not None:
+            if side > 0 and ind["breadth"] >= p["breadthLimit"]:
+                return ev
+            if side < 0 and ind["breadth"] <= -p["breadthLimit"]:
+                return ev
         self.pos = {"side": side, "entry": px, "time": bar["time"], "minute": bar["minute"], "bars": 0}
         self.day_trades += 1
         ev.append({"type": "entry", "side": side, "price": px, "time": bar["time"],
@@ -433,9 +449,9 @@ class PaperTrader:
         }
 
 
-def backtest_bars(bars: List[dict], params: Optional[dict] = None) -> dict:
+def backtest_bars(bars: List[dict], params: Optional[dict] = None, breadth_by_min: Optional[dict] = None) -> dict:
     p = merge_params(params)
-    series = compute_series(bars, p)
+    series = compute_series(bars, p, breadth_by_min)
     pt = PaperTrader(p)
     events: List[dict] = []
     for i, b in enumerate(bars):
@@ -446,9 +462,9 @@ def backtest_bars(bars: List[dict], params: Optional[dict] = None) -> dict:
     return {"params": p, "bars": bars, "series": series, "events": events, "trades": pt.trades, "stats": pt.stats()}
 
 
-def backtest_day(trades: List[dict], params: Optional[dict] = None) -> dict:
+def backtest_day(trades: List[dict], params: Optional[dict] = None, breadth_by_min: Optional[dict] = None) -> dict:
     p = merge_params(params)
-    return backtest_bars(build_bars(trades, p), p)
+    return backtest_bars(build_bars(trades, p), p, breadth_by_min)
 
 
 def grid_search(days: List[dict], grid: Optional[dict] = None, base: Optional[dict] = None) -> List[dict]:
@@ -479,7 +495,7 @@ def grid_search(days: List[dict], grid: Optional[dict] = None, base: Optional[di
         pnl = 0.0; n = 0; wins = 0; gw = 0.0; gl = 0.0; dd = 0.0; eq = 0.0; peak = 0.0; pos_days = 0
         per_day = []
         for day in days:
-            r = backtest_bars(bars_for(day, p["bigLot"]), p)
+            r = backtest_bars(bars_for(day, p["bigLot"]), p, day.get("breadth"))
             pnl += r["stats"]["pnlPts"]; n += r["stats"]["trades"]
             for t in r["trades"]:
                 if t["pnl"] > 0:

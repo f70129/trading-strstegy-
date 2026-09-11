@@ -45,6 +45,8 @@
     entryCutoff: '13:00', // 之後不再新進場
     flatAt: '13:40',      // 強制平倉
     minBarsForZ: 10,      // 至少幾根 K 才開始計算 z-score
+    breadthFilter: false, // 啟用漲跌家數（市場廣度／類江波圖）過濾
+    breadthLimit: 700,    // 淨漲跌家數（漲家數−跌家數）≥ 此值 → 不做多；≤ −此值 → 不做空
   };
 
   // ---------- 小工具 ----------
@@ -264,15 +266,17 @@
    *   vwap（大台）、cumBig / cumRetail（日累計）
    * 回傳與 bars 等長的陣列（前幾根不足 minBarsForZ 時 z = 0）。
    */
-  function computeSeries(bars, params) {
+  function computeSeries(bars, params, breadthByMin) {
     const p = mergeParams(params);
     const W = Math.max(1, p.windowMin | 0);
     const n = bars.length;
     const out = new Array(n);
     const bigNetArr = [], retNetArr = [];
-    let cumBig = 0, cumRet = 0, cumAmt = 0, cumVol = 0;
+    let cumBig = 0, cumRet = 0, cumAmt = 0, cumVol = 0, lastBreadth = null;
+    const bm = breadthByMin || null;
     for (let i = 0; i < n; i++) {
       const b = bars[i];
+      if (bm) { const v = bm[b.minute]; if (v != null && Number.isFinite(Number(v))) lastBreadth = Number(v); }
       const bigNet = b.bigBuy - b.bigSell;
       const retNet = b.smallBuy - b.smallSell;
       bigNetArr.push(bigNet); retNetArr.push(retNet);
@@ -295,6 +299,7 @@
         zBig: round(zBig, 4), zRetail: round(zRet, 4), smi: round(smi, 4),
         cumBig: round(cumBig, 3), cumRetail: round(cumRet, 3),
         vwap: cumVol > 0 ? round(cumAmt / cumVol, 2) : b.close,
+        breadth: lastBreadth,
       };
     }
     return out;
@@ -393,6 +398,11 @@
         if (side > 0 && px < ind.vwap) return ev;
         if (side < 0 && px > ind.vwap) return ev;
       }
+      // 漲跌家數（市場廣度／類江波圖）過濾：過熱不追多、過冷不追空
+      if (p.breadthFilter && p.breadthLimit > 0 && ind.breadth != null) {
+        if (side > 0 && ind.breadth >= p.breadthLimit) return ev;
+        if (side < 0 && ind.breadth <= -p.breadthLimit) return ev;
+      }
       this.pos = { side, entry: px, time: bar.time, minute: bar.minute, bars: 0 };
       this.dayTrades++;
       ev.push({ type: 'entry', side, price: px, time: bar.time, reason: side > 0 ? '大戶淨買 SMI≥門檻' : '大戶淨賣 SMI≤-門檻', smi: ind.smi });
@@ -415,15 +425,15 @@
   }
 
   /** 單日回測：trades（逐筆）→ bars → series → PaperTrader */
-  function backtestDay(trades, params) {
+  function backtestDay(trades, params, breadthByMin) {
     const p = mergeParams(params);
     const bars = buildBars(trades, p);
-    return backtestBars(bars, p);
+    return backtestBars(bars, p, breadthByMin);
   }
 
-  function backtestBars(bars, params) {
+  function backtestBars(bars, params, breadthByMin) {
     const p = mergeParams(params);
-    const series = computeSeries(bars, p);
+    const series = computeSeries(bars, p, breadthByMin);
     const pt = new PaperTrader(p);
     const events = [];
     for (let i = 0; i < bars.length; i++) {
@@ -466,7 +476,7 @@
       let pnl = 0, n = 0, wins = 0, gw = 0, gl = 0, dd = 0, eq = 0, peak = 0, posDays = 0;
       const perDay = [];
       for (const day of days) {
-        const r = backtestBars(barsFor(day, p.bigLot), p);
+        const r = backtestBars(barsFor(day, p.bigLot), p, day.breadth);
         pnl += r.stats.pnlPts; n += r.stats.trades;
         for (const t of r.trades) {
           if (t.pnl > 0) { wins++; gw += t.pnl; } else gl -= t.pnl;
@@ -673,6 +683,54 @@
     return { trades, cursor: c };
   }
 
+  // ---------- 漲跌家數 / 市場廣度（類江波圖）----------
+  /**
+   * 從 FinMind TaiwanVariousIndicators5Seconds（台股大盤每 5 秒各項指標）解析漲跌家數。
+   * 欄位名不確定 → 容錯比對：含「漲/上漲/up/rise/advance」為上漲家數，含「跌/下跌/down/fall/decline」為下跌家數；
+   * 也接受直接的淨值欄位。回傳 { byMinute:{分:淨漲跌家數}, last:{up,down,net,time} }。
+   * 淨漲跌家數 = 上漲家數 − 下跌家數（每分鐘取最後一筆 5 秒值）。
+   */
+  function pickField(row, positives, negatives) {
+    for (const k of Object.keys(row)) {
+      const key = String(k).toLowerCase();
+      if (negatives && negatives.some(n => key.includes(n))) continue;
+      if (positives.some(pos => key.includes(pos))) {
+        const v = Number(row[k]);
+        if (Number.isFinite(v)) return v;
+      }
+    }
+    return null;
+  }
+  function breadthUpDown(row) {
+    // 先找中文精確欄位
+    let up = null, down = null;
+    for (const k of Object.keys(row)) {
+      const ks = String(k);
+      if (up == null && /(^|[^不])上漲家數|漲家數|advance|rise|up_?num|updn?count|numup/i.test(ks)) { const v = Number(row[k]); if (Number.isFinite(v)) up = v; }
+      if (down == null && /下跌家數|跌家數|decline|fall|down_?num|numdown/i.test(ks)) { const v = Number(row[k]); if (Number.isFinite(v)) down = v; }
+    }
+    if (up == null) up = pickField(row, ['漲', 'up', 'rise', 'advanc'], ['跌', 'down', 'fall', 'declin', '平', 'change', 'index', 'price', 'amount', 'volume', 'trade']);
+    if (down == null) down = pickField(row, ['跌', 'down', 'fall', 'declin'], ['漲', 'up', 'rise', 'advanc', '平', 'change', 'index', 'price', 'amount', 'volume', 'trade']);
+    return { up, down };
+  }
+  function parseBreadthRows(rows, opts) {
+    const o = Object.assign({ fallbackMinute: 0 }, opts || {});
+    const byMinute = {};
+    let last = null;
+    for (const r of (Array.isArray(rows) ? rows : [])) {
+      // 直接淨值欄位（若有）
+      let net = null;
+      for (const k of Object.keys(r)) { if (/net.*(adv|breadth|漲跌)|漲跌家數/i.test(String(k))) { const v = Number(r[k]); if (Number.isFinite(v)) { net = v; break; } } }
+      let up = null, down = null;
+      if (net == null) { const ud = breadthUpDown(r); up = ud.up; down = ud.down; if (up != null && down != null) net = up - down; }
+      if (net == null) continue;
+      const t = parseTickTime(r.date || r.Time || r.time, o.fallbackMinute);
+      byMinute[t.minute] = net;
+      last = { up, down, net, time: (r.date || r.Time || r.time || ''), minute: t.minute };
+    }
+    return { byMinute, last };
+  }
+
   // ---------- 合成資料（測試 / 示範）----------
   /** mulberry32：與 Python 版完全相同的 32 位元 PRNG（跨語言一致性檢核用） */
   function mulberry32(seed) {
@@ -741,6 +799,6 @@
     selectNearContract, tickSide, classify, rowsToTrades, FlowBook, buildBars,
     computeSeries, sentiment, PaperTrader, backtestDay, backtestBars, gridSearch,
     snapshotToTrades, intervalSide, parseFutOptTickRows, parseFuturesTickRows, parseFutOptTime, toList,
-    futuresMonthCode, nearMonthContract, contractExpiryKey, mulberry32, syntheticDay, round,
+    futuresMonthCode, nearMonthContract, contractExpiryKey, parseBreadthRows, mulberry32, syntheticDay, round,
   };
 });
