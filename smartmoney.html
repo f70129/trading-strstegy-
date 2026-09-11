@@ -9,7 +9,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>台指期聰明錢看板 · 大單/小單即時流向</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/smartmoney-core.js?v=10"></script>
+<script src="js/smartmoney-core.js?v=11"></script>
 <style>
 :root {
   --bg:#0a0e1a; --panel:#111827; --panel2:#0f172a; --border:#1f2d40;
@@ -149,6 +149,7 @@ pre.log{background:#050810;border:1px solid var(--border);border-radius:8px;padd
         <div class="kpi"><div class="k">大單淨流（窗）</div><div class="v" id="kWinBig">—</div></div>
         <div class="kpi"><div class="k">散戶淨流（窗）</div><div class="v" id="kWinRet">—</div></div>
         <div class="kpi"><div class="k">價格 vs VWAP</div><div class="v" id="kVwap">—</div></div>
+        <div class="kpi"><div class="k">淨漲跌家數（廣度）</div><div class="v" id="kBreadth">—</div></div>
       </div>
     </div>
     <div class="panel">
@@ -285,6 +286,8 @@ pre.log{background:#050810;border:1px solid var(--border);border-radius:8px;padd
       <div><label class="f">最後進場時間</label><input type="text" id="pEntryCut" placeholder="13:00"></div>
       <div><label class="f">強制平倉時間</label><input type="text" id="pFlatAt" placeholder="13:40"></div>
       <div><label class="f">趨勢濾網（價格與 VWAP 同側）</label><select id="pTrend"><option value="1">開啟</option><option value="0">關閉</option></select></div>
+      <div><label class="f">漲跌家數過濾（類江波圖）</label><select id="pBreadth"><option value="0">關閉</option><option value="1">開啟</option></select></div>
+      <div><label class="f">淨漲跌家數門檻（≥ 不做多 / ≤ −不做空）</label><input type="number" id="pBreadthLimit" min="50" max="2000" step="10"></div>
     </div>
     <div class="row" style="margin-top:12px">
       <button class="btn" id="btnSave">💾 儲存設定</button>
@@ -373,7 +376,7 @@ function fillForm() {
   $('inTgEntry').checked = settings.tgEntry; $('inTgExit').checked = settings.tgExit; $('inTgMood').checked = settings.tgMood; $('inTgSummary').checked = settings.tgSummary;
   $('pBigLot').value = p.bigLot; $('pMidLot').value = p.midLot; $('pWindow').value = p.windowMin; $('pZEntry').value = p.zEntry; $('pZExit').value = p.zExit;
   $('pStop').value = p.stopPts; $('pTarget').value = p.targetPts; $('pRetailW').value = p.retailWeight; $('pCost').value = p.costPts;
-  $('pCooldown').value = p.cooldownMin; $('pMaxTrades').value = p.maxTradesPerDay; $('pEntryCut').value = p.entryCutoff; $('pFlatAt').value = p.flatAt; $('pTrend').value = p.trendFilter ? '1' : '0';
+  $('pCooldown').value = p.cooldownMin; $('pMaxTrades').value = p.maxTradesPerDay; $('pEntryCut').value = p.entryCutoff; $('pFlatAt').value = p.flatAt; $('pTrend').value = p.trendFilter ? '1' : '0'; $('pBreadth').value = p.breadthFilter ? '1' : '0'; $('pBreadthLimit').value = p.breadthLimit;
   $('bigLotLbl').textContent = p.bigLot; $('midLotLbl').textContent = `${p.midLot}–${p.bigLot - 1}`;
 }
 function readForm() {
@@ -390,6 +393,7 @@ function readForm() {
   p.entryCutoff = /^\d{2}:\d{2}$/.test($('pEntryCut').value) ? $('pEntryCut').value : '13:00';
   p.flatAt = /^\d{2}:\d{2}$/.test($('pFlatAt').value) ? $('pFlatAt').value : '13:40';
   p.trendFilter = $('pTrend').value === '1';
+  p.breadthFilter = $('pBreadth').value === '1'; p.breadthLimit = num('pBreadthLimit', 700);
 }
 
 // ---------------- 日誌 / 狀態 ----------------
@@ -504,6 +508,7 @@ const S = {
   snaps: {}, quotes: {}, signals: [], lastMood: null, lastSummaryMin: -1,
   demoTrades: null, demoIdx: 0, demoMinute: 0, lastSave: 0,
   tickCursor: {}, tickOk: {}, tickCount: {}, tickSrc: {}, tickTimer: null, tickRawLogged: {}, tickCodeMap: {},
+  breadthByMin: {}, breadthLast: null, breadthErr: '',
 };
 function taipeiNow() {
   const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }); // YYYY-MM-DD HH:mm:ss
@@ -515,6 +520,7 @@ function resetDay(date) {
   S.date = date; S.book = new SM.FlowBook(settings.params); S.trader = new SM.PaperTrader(settings.params);
   S.series = []; S.processedMinute = -1; S.snaps = {}; S.signals = []; S.lastMood = null; S.lastSummaryMin = -1;
   S.tickCursor = {}; S.tickOk = {}; S.tickCount = {}; S.tickSrc = {};
+  S.breadthByMin = {}; S.breadthLast = null; S.breadthErr = '';
   tgSent.clear();
 }
 function saveState() {
@@ -537,7 +543,7 @@ function restoreState() {
     S.snaps = st.snaps || {}; S.signals = st.signals || []; S.processedMinute = st.processedMinute ?? -1; S.quotes = st.quotes || {};
     S.tickCursor = st.tickCursor || {}; S.tickCount = st.tickCount || {};
     Object.assign(S.trader, st.trader || {});
-    S.series = SM.computeSeries(S.book.bars, settings.params);
+    S.series = SM.computeSeries(S.book.bars, settings.params, S.breadthByMin);
     log(`已還原今日狀態（${S.book.bars.length} 根 K，${S.trader.trades.length} 筆交易）`);
     return true;
   } catch (_) { return false; }
@@ -577,7 +583,7 @@ function checkMood() {
 function processBars(currentMinute) {
   const bars = S.book.bars;
   if (!bars.length) return;
-  S.series = SM.computeSeries(bars, settings.params);
+  S.series = SM.computeSeries(bars, settings.params, S.breadthByMin);
   for (let i = 0; i < bars.length; i++) {
     const b = bars[i];
     if (b.minute <= S.processedMinute || b.minute >= currentMinute || b.close == null) continue;
@@ -630,7 +636,7 @@ async function pollOnce() {
     else if (!daySession) notice('🕒 <b>目前非日盤交易時段（08:45–13:45）</b>，盤中逐筆沒有即時資料，大小單無法統計，這是正常的。<br>報價仍會顯示最新收盤。想現在就看大單/小單分析，請到「<b>回測</b>」分頁選一個<b>過去交易日</b>跑逐筆回測。');
     else if (S._tickErr) notice(`⚠️ <b>盤中逐筆尚未取得</b>（大小單暫時無法統計）。原因：${S._tickErr}<br>可按「🔍 逐筆診斷」看原始回傳並截圖給開發者。`);
     else notice('');
-    if (inDaySession(minute)) processBars(minute); else { S.series = SM.computeSeries(S.book.bars, settings.params); checkMood(); }
+    if (inDaySession(minute)) processBars(minute); else { S.series = SM.computeSeries(S.book.bars, settings.params, S.breadthByMin); checkMood(); }
     render(); saveState();
   } else {
     badge('bData', 'FinMind ✗', 'err');
@@ -649,6 +655,25 @@ async function fetchFuturesTick(key, date) {
   let j = await finmind('data', { dataset: 'TaiwanFuturesTick', data_id: key, start_date: date, end_date: date }, 120000);
   if (!(j.data || []).length) j = await finmind('data', { dataset: 'TaiwanFuturesTick', data_id: key, date }, 120000);
   return j;
+}
+/** 漲跌家數（市場廣度）：TaiwanVariousIndicators5Seconds（台股大盤每 5 秒各項指標） */
+async function fetchBreadth(date) {
+  let j = await finmind('data', { dataset: 'TaiwanVariousIndicators5Seconds', start_date: date, end_date: date }, 90000);
+  if (!(j.data || []).length) j = await finmind('data', { dataset: 'TaiwanVariousIndicators5Seconds', date }, 90000);
+  return j;
+}
+async function pollBreadth() {
+  if (!settings.params.breadthFilter || S.demo) return;
+  const now = taipeiNow();
+  try {
+    const j = await fetchBreadth(now.date);
+    const rows = j.data || [];
+    if (!rows.length) { S.breadthErr = '漲跌家數回傳 0 列（盤前/收盤或欄位不符）'; return; }
+    if (!S._breadthRawLogged) { S._breadthRawLogged = 1; log('漲跌家數 TaiwanVariousIndicators5Seconds 首列：' + JSON.stringify(rows[0]).slice(0, 300)); }
+    const b = SM.parseBreadthRows(rows);
+    if (b.last == null) { S.breadthErr = '漲跌家數欄位無法辨識，請把「檢核」的原始欄位截圖給開發者'; return; }
+    S.breadthByMin = b.byMinute; S.breadthLast = b.last; S.breadthErr = '';
+  } catch (e) { S.breadthErr = e.message; }
 }
 function taipeiDate() { return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei' })); }
 function tickCodeFor(pr) {
@@ -676,6 +701,7 @@ async function pollTicks() {
   if (settings.mode === 'snapshot' || !S.running || S.demo) return;
   const now = taipeiNow();
   if (S.date !== now.date) resetDay(now.date);
+  await pollBreadth();
   let minute = now.minute, any = false;
   for (const pr of PRODUCTS) {
     try {
@@ -703,7 +729,7 @@ async function pollTicks() {
     }
   }
   if (any) {
-    if (inDaySession(minute)) processBars(Math.min(minute, now.minute)); else { S.series = SM.computeSeries(S.book.bars, settings.params); checkMood(); }
+    if (inDaySession(minute)) processBars(Math.min(minute, now.minute)); else { S.series = SM.computeSeries(S.book.bars, settings.params, S.breadthByMin); checkMood(); }
     render(); saveState();
   }
   // 逐筆抓不到 TX（跑了 ≥2 輪仍無資料）→ 自動診斷一次，把真實回應印在畫面
@@ -851,6 +877,15 @@ function render() {
     $('kWinBig').textContent = signed(ind.winBig, 0); $('kWinBig').className = 'v ' + cls(ind.winBig);
     $('kWinRet').textContent = signed(ind.winRetail, 1); $('kWinRet').className = 'v ' + cls(ind.winRetail);
     const d = ind.close - ind.vwap; $('kVwap').textContent = `${signed(d, 0)}`; $('kVwap').className = 'v ' + cls(d);
+    const kb = $('kBreadth');
+    if (kb) {
+      if (!settings.params.breadthFilter) { kb.textContent = '未啟用'; kb.className = 'v muted'; }
+      else if (S.breadthLast) {
+        const nv = S.breadthLast.net, lim = settings.params.breadthLimit;
+        let tag = ''; if (nv >= lim) tag = ' · 過熱→不追多'; else if (nv <= -lim) tag = ' · 過冷→不追空';
+        kb.textContent = signed(nv, 0) + tag; kb.className = 'v ' + cls(nv);
+      } else { kb.textContent = S.breadthErr ? '取不到' : '等資料'; kb.className = 'v ' + (S.breadthErr ? 'down' : 'muted'); kb.title = S.breadthErr || ''; }
+    }
   }
   // 流量表
   const set = (id, v, d) => { const e = $(id); e.textContent = fmt(v, d); };
@@ -927,6 +962,10 @@ async function loadContext() {
 }
 
 // ---------------- 回測 ----------------
+async function fetchDayBreadth(date) {
+  try { const j = await fetchBreadth(date); const b = SM.parseBreadthRows(j.data || []); return b.byMinute; }
+  catch (e) { log(`${date} 漲跌家數取得失敗：${e.message}`, 'WARN'); return null; }
+}
 async function fetchDayTicks(date) {
   const out = {};
   for (const pr of PRODUCTS) {
@@ -974,7 +1013,7 @@ async function runBacktest() {
     await new Promise(r => setTimeout(r, 30));
     const allTrades = []; let eq = 0; const eqPts = [], eqLbl = []; let wins = 0, gw = 0, gl = 0, dd = 0, peak = 0, posDays = 0;
     for (const day of days) {
-      const r = SM.backtestDay(day.trades, settings.params);
+      const r = SM.backtestDay(day.trades, settings.params, day.breadth);
       for (const tr of r.trades) { allTrades.push(Object.assign({ date: day.date }, tr)); eq += tr.pnl; eqPts.push(SM.round(eq, 1)); eqLbl.push(`${day.date} ${tr.exitTime}`); if (tr.pnl > 0) { wins++; gw += tr.pnl; } else gl -= tr.pnl; peak = Math.max(peak, eq); dd = Math.max(dd, peak - eq); }
       if (r.stats.pnlPts > 0) posDays++;
     }
@@ -1066,6 +1105,11 @@ async function runChecks() {
   // FinMind token
   if (!settings.token) add({ name: 'FinMind Token', ok: false, msg: '未填寫（設定分頁）' });
   else {
+    try {
+      const bj = await fetchBreadth(taipeiNow().date);
+      const brows = bj.data || []; const bb = SM.parseBreadthRows(brows);
+      add({ name: '漲跌家數 TaiwanVariousIndicators5Seconds', ok: brows.length > 0 && bb.last != null, warn: brows.length > 0 && bb.last == null, msg: brows.length ? (bb.last != null ? `淨漲跌家數 ${bb.last.net}（上漲 ${bb.last.up ?? '?'} / 下跌 ${bb.last.down ?? '?'}）` : `有 ${brows.length} 列但欄位無法辨識，首列 ${JSON.stringify(brows[0]).slice(0, 220)}`) : '回傳 0 列（盤前/收盤或無權限）' });
+    } catch (e) { add({ name: '漲跌家數 TaiwanVariousIndicators5Seconds', ok: false, warn: true, msg: e.message }); }
     try { const j = await finmind('data', { dataset: 'TaiwanStockTradingDate', start_date: '2026-01-01', end_date: '2026-01-10' }, 15000); add({ name: 'FinMind Token 有效（免費資料集）', ok: (j.data || []).length > 0, msg: `${(j.data || []).length} 筆` }); }
     catch (e) { add({ name: 'FinMind Token 有效（免費資料集）', ok: false, msg: e.message }); }
     try { const j = await finmind('taiwan_futures_snapshot', { data_id: 'TXF' }, 15000); const row = pickNear(j.data, 'TXF'); add({ name: '即時快照權限 taiwan_futures_snapshot（付費）', ok: !!row, msg: row ? `${row.futures_id} ${row.date} 價 ${row.close} 量 ${row.total_volume} TickType=${row.TickType ?? row.tick_type ?? '無'}` : '回傳無資料（非交易時段可能為空）', warn: !row }); if (row) badge('bData', 'FinMind 快照 ✓', 'ok'); }
