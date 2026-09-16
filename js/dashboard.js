@@ -78,17 +78,57 @@ function quickSymbol(sym) {
 const FINMIND_API = 'https://api.finmindtrade.com/api/v4/data';
 const TAIEX_VOL_CACHE_KEY = 'finmind_taiex_vol_v1';
 
-/** 加權「價格指數」合理區間（排除報酬指數等異常值） */
+/** 加權「價格指數」合理區間（現貨約 2 萬） */
 function isValidTaiexClose(close) {
   const c = Number(close);
   return Number.isFinite(c) && c >= 4000 && c <= 35000;
 }
 
-function finMindPriceRowsToDailyBars(rows) {
+/** FinMind 報酬指數（數值較高，需換算成現貨價位） */
+function isValidFinMindIndexClose(close) {
+  const c = Number(close);
+  return Number.isFinite(c) && c >= 4000 && c <= 80000;
+}
+
+async function getTaiexSpotReference() {
+  try {
+    const rt = await fetchTwseRealtime('t00', 'index');
+    if (rt?.price > 0 && isValidTaiexClose(rt.price)) return rt.price;
+  } catch (_) { /* 盤後或非交易時段 */ }
+  try {
+    const y = await fetchYahooTwiiDailyBars(10);
+    const c = y[y.length - 1]?.close;
+    if (c > 0 && isValidTaiexClose(c)) return c;
+  } catch (_) { /* ignore */ }
+  return null;
+}
+
+function scaleBarsToSpot(bars, spotRef) {
+  if (!bars.length || !spotRef) return bars;
+  const last = bars[bars.length - 1].close;
+  if (!Number.isFinite(last) || last <= 35000) return bars;
+  const ratio = spotRef / last;
+  return bars.map(b => ({
+    ...b,
+    open: b.open * ratio,
+    high: b.high * ratio,
+    low: b.low * ratio,
+    close: b.close * ratio,
+  }));
+}
+
+async function normalizeTaiexBarsToSpot(bars) {
+  if (!bars.length || bars[bars.length - 1].close <= 35000) return bars;
+  const spot = await getTaiexSpotReference();
+  return scaleBarsToSpot(bars, spot);
+}
+
+function finMindPriceRowsToDailyBars(rows, { acceptTotalReturn = false } = {}) {
+  const okClose = acceptTotalReturn ? isValidFinMindIndexClose : isValidTaiexClose;
   const bars = [];
   for (const r of rows || []) {
     const close = Number(r.close ?? r.closing_index ?? r.price ?? r.TAIEX);
-    if (!isValidTaiexClose(close)) continue;
+    if (!okClose(close)) continue;
     bars.push({
       date: String(r.date).slice(0, 10),
       open: Number(r.open) || close,
@@ -447,7 +487,6 @@ async function fetchTaiexDailyHistory(days = 90, onProgress, minBarsOverride) {
 
   const finmindStrategies = [
     { dataset: 'TaiwanStockTotalReturnIndex', data_id: 'TAIEX', label: 'FinMind 加權 TAIEX' },
-    { dataset: 'TaiwanStockTotalReturnIndex', data_id: 'TPEx', label: 'FinMind 櫃買 TPEx' },
   ];
 
   let best = [];
@@ -461,7 +500,9 @@ async function fetchTaiexDailyHistory(days = 90, onProgress, minBarsOverride) {
         start_date: startDate,
         end_date: endDate,
       });
-      const bars = finMindPriceRowsToDailyBars(rows).slice(-days);
+      const acceptTR = s.dataset === 'TaiwanStockTotalReturnIndex';
+      let bars = finMindPriceRowsToDailyBars(rows, { acceptTotalReturn: acceptTR }).slice(-days);
+      if (acceptTR && bars.length) bars = await normalizeTaiexBarsToSpot(bars);
       if (bars.length > best.length) best = bars;
       if (bars.length >= minBars) {
         if (onProgress) onProgress(3, 3);
@@ -471,6 +512,11 @@ async function fetchTaiexDailyHistory(days = 90, onProgress, minBarsOverride) {
     } catch (e) {
       lastErr = e.message || lastErr;
     }
+  }
+
+  if (best.length >= minBars || (minBars <= 5 && best.length >= 2)) {
+    if (onProgress) onProgress(3, 3);
+    return best;
   }
 
   try {
@@ -1128,13 +1174,20 @@ async function fetchTaiexIndexHistorical(startDate, endDate) {
         45000,
         s.label,
       );
-      bars = bars.filter(b => isValidTaiexClose(b.close));
+      bars = await normalizeTaiexBarsToSpot(finMindPriceRowsToDailyBars(
+        bars.map(b => ({ date: b.date, price: b.close })),
+        { acceptTotalReturn: s.dataset === 'TaiwanStockTotalReturnIndex' },
+      ));
       if (bars.length < 100) {
-        bars = (await withTimeout(
+        const byYear = await withTimeout(
           fetchTaiexIndexByYear(s.dataset, s.data_id, startDate, endDate),
           90000,
           `${s.label}分批`,
-        )).filter(b => isValidTaiexClose(b.close));
+        );
+        bars = await normalizeTaiexBarsToSpot(finMindPriceRowsToDailyBars(
+          byYear.map(b => ({ date: b.date, price: b.close })),
+          { acceptTotalReturn: s.dataset === 'TaiwanStockTotalReturnIndex' },
+        ));
       }
       if (bars.length >= 100) {
         try {
