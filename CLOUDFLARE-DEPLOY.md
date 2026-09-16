@@ -34,7 +34,7 @@ Could not detect a directory containing static files
 | Framework preset | **None** |
 | Build command | **留空**（或 `npm run build`） |
 | Build output directory | **`.`**（一個點，代表 repo 根目錄） |
-| Deploy command | **留空**（不要填 `npx wrangler deploy`） |
+| Deploy command | **留空**；若介面強制必填 → 改填 **`npm run deploy`**（勿用 `npx wrangler deploy`） |
 
 ### 4. 環境變數
 
@@ -61,7 +61,8 @@ Could not detect a directory containing static files
 | 現象 | 原因 | 解法 |
 |------|------|------|
 | pip install streamlit | 連到錯的 repo／分支，或 Build 設錯 | 確認 repo 根目錄有 `index.html`，Build 留空 |
-| `wrangler deploy` 找不到 static | 用了 **Workers** 而非 **Pages** | 改建 **Pages** 專案 |
+| `wrangler deploy` 找不到 static | Deploy 用了 Workers 指令 | 改填 **`npm run deploy`**（內建 `wrangler pages deploy`） |
+| Deploy command 無法刪除 | 新版 Cloudflare 介面強制必填 | 填 **`npm run deploy`**，專案名須為 `trading-strstegy` |
 | `/api/finmind` 404 | Functions 未部署 | 確認 repo 有 `functions/api/` 資料夾 |
 | Token 失效 | 環境變數未設 | 填 `FINMIND_TOKEN` 後 Redeploy |
 

@@ -3,6 +3,10 @@
   "private": true,
   "description": "Static HTML trading dashboard — no npm build",
   "scripts": {
-    "build": "node -e \"console.log('Static site ready')\""
+    "build": "node -e \"console.log('Static site ready')\"",
+    "deploy": "wrangler pages deploy . --project-name=trading-strstegy --commit-dirty=true"
+  },
+  "devDependencies": {
+    "wrangler": "^4.132.0"
   }
 }
