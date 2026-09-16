@@ -71,11 +71,21 @@ Cloudflare 建置環境內建 Token **不能** 執行 `wrangler pages deploy`（
 
 **解法 A（建議）**：Deploy command 維持 `npm run deploy`（只印 OK，實際由 **Build output directory = `.`** 自動上線）。
 
-**解法 B**（若 A 後網站仍空白）：到 [API Tokens](https://dash.cloudflare.com/profile/api-tokens) 建立 Token：
+**解法 B（建議）**：自建 Token，變數名用 **`PAGES_DEPLOY_TOKEN`**（不要用 `CLOUDFLARE_API_TOKEN`，會被 CI 唯讀 Token 蓋掉）：
 
-- 權限：**Account → Cloudflare Pages → Edit**
-- 加到 Pages **Environment variables**：`CLOUDFLARE_API_TOKEN` = 該 Token
-- Deploy command 改：`npm run deploy:wrangler`
+1. [API Tokens](https://dash.cloudflare.com/profile/api-tokens) → Create Custom Token  
+2. 權限：**Account → Cloudflare Pages → Edit**  
+3. Pages **Environment variables → Production**：
+   - `PAGES_DEPLOY_TOKEN` = 剛建立的 Token  
+   - `CLOUDFLARE_ACCOUNT_ID` = `a96bc667b234e3831128e3e481821ff0`  
+4. Deploy command：`npm run deploy:wrangler`  
+5. Retry deployment  
+
+**解法 C（最穩）**：GitHub Actions 自動部署（見 `.github/workflows/cloudflare-pages.yml`）：
+
+1. GitHub repo → **Settings → Secrets → Actions** → New secret：`CLOUDFLARE_API_TOKEN`（Pages Edit 權限）  
+2. push 到 `main` 後到 **Actions** 分頁看部署  
+3. 成功後網址：`https://trading-strstegy.pages.dev`
 | `/api/finmind` 404 | Functions 未部署 | 確認 repo 有 `functions/api/` 資料夾 |
 | Token 失效 | 環境變數未設 | 填 `FINMIND_TOKEN` 後 Redeploy |
 
