@@ -92,6 +92,8 @@ v43 起支援 **Netlify / Cloudflare 雙平台**，程式會自動偵測並走�
 
 ### 步驟
 
+> **常見錯誤**：若 Build log 出現 `pip install streamlit` 或 `npx wrangler deploy`，代表建錯 **Workers** 專案。請改 **Pages**，Build 留空、Output 填 `.`，詳見 [`CLOUDFLARE-DEPLOY.md`](CLOUDFLARE-DEPLOY.md)。
+
 1. 登入 [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **Create** → **Pages** → **Connect to Git**
 2. 選同一個 GitHub repo
 3. **Build command** 留空，**Build output directory** 填 `.`

@@ -1,0 +1,8 @@
+{
+  "name": "taiwan-trading-dashboard",
+  "private": true,
+  "description": "Static HTML trading dashboard — no npm build",
+  "scripts": {
+    "build": "node -e \"console.log('Static site ready')\""
+  }
+}
