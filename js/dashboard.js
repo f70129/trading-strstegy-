@@ -78,16 +78,21 @@ function quickSymbol(sym) {
 const FINMIND_API = 'https://api.finmindtrade.com/api/v4/data';
 const TAIEX_VOL_CACHE_KEY = 'finmind_taiex_vol_v1';
 
-/** 加權「價格指數」合理區間（現貨約 2 萬） */
+/** 加權現貨指數合理區間（2026 台股已突破 4 萬） */
 function isValidTaiexClose(close) {
   const c = Number(close);
-  return Number.isFinite(c) && c >= 4000 && c <= 35000;
+  return Number.isFinite(c) && c >= 3000 && c <= 100000;
 }
 
-/** FinMind 報酬指數（數值較高，需換算成現貨價位） */
+/** FinMind 報酬指數（數值高於現貨，需換算） */
 function isValidFinMindIndexClose(close) {
   const c = Number(close);
-  return Number.isFinite(c) && c >= 4000 && c <= 80000;
+  return Number.isFinite(c) && c >= 3000 && c <= 250000;
+}
+
+function isTotalReturnIndexLevel(close) {
+  const c = Number(close);
+  return Number.isFinite(c) && c > 50000;
 }
 
 async function getTaiexSpotReference() {
@@ -106,7 +111,7 @@ async function getTaiexSpotReference() {
 function scaleBarsToSpot(bars, spotRef) {
   if (!bars.length || !spotRef) return bars;
   const last = bars[bars.length - 1].close;
-  if (!Number.isFinite(last) || last <= 35000) return bars;
+  if (!Number.isFinite(last) || !isTotalReturnIndexLevel(last)) return bars;
   const ratio = spotRef / last;
   return bars.map(b => ({
     ...b,
@@ -118,7 +123,7 @@ function scaleBarsToSpot(bars, spotRef) {
 }
 
 async function normalizeTaiexBarsToSpot(bars) {
-  if (!bars.length || bars[bars.length - 1].close <= 35000) return bars;
+  if (!bars.length || !isTotalReturnIndexLevel(bars[bars.length - 1].close)) return bars;
   const spot = await getTaiexSpotReference();
   return scaleBarsToSpot(bars, spot);
 }
@@ -409,7 +414,20 @@ async function fetchFinMind(params) {
     for (const withUserToken of tokenModes) {
       const qCloud = new URLSearchParams(qs);
       if (withUserToken && token) qCloud.set('token', token);
-      fetchers.push(() => fetchCloudGet('finmind', qCloud.toString()));
+      fetchers.push(async () => {
+        const suffix = qCloud.toString() ? `?${qCloud.toString()}` : '';
+        let lastErr = '雲端 FinMind 連線失敗';
+        for (const base of cloudFnBases('finmind')) {
+          try {
+            const r = await fetch(`${base}${suffix}`, { signal: AbortSignal.timeout(60000) });
+            const json = await r.json();
+            return { ok: r.ok, json };
+          } catch (e) {
+            lastErr = e.message || lastErr;
+          }
+        }
+        throw new Error(lastErr);
+      });
     }
   } else if (token) {
     fetchers.push(
@@ -435,8 +453,11 @@ async function fetchFinMind(params) {
       : 'FinMind 連線失敗';
   for (const f of fetchers) {
     try {
-      const r = await f();
-      const json = await r.json();
+      const res = await f();
+      let json;
+      if (res instanceof Response) json = await res.json();
+      else if (res && typeof res.json === 'object' && res.json !== null) json = res.json;
+      else json = res;
       if (json.code === 'TOKEN_ILLEGAL' || /Token is illegal/i.test(json.msg || json.error || '')) {
         lastErr = token
           ? 'FinMind Token 無效，請至設定重新填入 finmindtrade.com 取得的新 Token'
