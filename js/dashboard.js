@@ -175,8 +175,73 @@ function isCloudDeployed() {
   return true;
 }
 
+function guessCloudProvider() {
+  const h = location.hostname;
+  if (h.endsWith('.pages.dev') || h.endsWith('.workers.dev')) return 'cloudflare';
+  if (h.endsWith('.netlify.app')) return 'netlify';
+  return 'auto';
+}
+
+function cloudProviderLabel() {
+  const p = window._cloudProviderResolved || window._cloudProvider || guessCloudProvider();
+  return p === 'cloudflare' ? 'Cloudflare' : 'Netlify';
+}
+
+async function resolveCloudProvider() {
+  if (window._cloudProviderResolved) return window._cloudProviderResolved;
+  const guessed = guessCloudProvider();
+  if (guessed !== 'auto') {
+    window._cloudProviderResolved = guessed;
+    window._cloudProvider = guessed;
+    return guessed;
+  }
+  for (const [name, url] of [
+    ['cloudflare', '/api/finmind?health=1'],
+    ['netlify', '/.netlify/functions/finmind?health=1'],
+  ]) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (j.ok) {
+        window._cloudProviderResolved = name;
+        window._cloudProvider = name;
+        return name;
+      }
+    } catch (_) { /* try next */ }
+  }
+  window._cloudProviderResolved = 'netlify';
+  window._cloudProvider = 'netlify';
+  return 'netlify';
+}
+
+function cloudFnBases(path) {
+  const netlify = `/.netlify/functions/${path}`;
+  const cf = `/api/${path}`;
+  const pref = window._cloudProvider || guessCloudProvider();
+  if (pref === 'cloudflare') return [cf, netlify];
+  if (pref === 'netlify') return [netlify, cf];
+  return [cf, netlify];
+}
+
 function cloudFn(path) {
-  return `/.netlify/functions/${path}`;
+  return cloudFnBases(path)[0];
+}
+
+async function fetchCloudGet(path, queryString, timeoutMs = 60000) {
+  const q = queryString.startsWith('?') ? queryString.slice(1) : queryString;
+  const suffix = q ? `?${q}` : '';
+  let lastErr = '雲端代理連線失敗';
+  for (const base of cloudFnBases(path)) {
+    try {
+      const r = await fetch(`${base}${suffix}`, { signal: AbortSignal.timeout(timeoutMs) });
+      if (r.ok) return r;
+      lastErr = `HTTP ${r.status}`;
+    } catch (e) {
+      lastErr = e.message || lastErr;
+    }
+  }
+  throw new Error(lastErr);
 }
 
 function proxyUrl(path) {
@@ -201,9 +266,11 @@ async function checkProxyHealth() {
 
   if (isCloudDeployed()) {
     try {
+      await resolveCloudProvider();
+      const fmQs = getFinMindToken() ? `health=1&token=${encodeURIComponent(getFinMindToken())}` : 'health=1';
       const [fredR, finR] = await Promise.all([
-        fetch(`${cloudFn('fred')}?health=1`, { signal: AbortSignal.timeout(5000) }),
-        fetch(`${cloudFn('finmind')}?health=1${getFinMindToken() ? `&token=${encodeURIComponent(getFinMindToken())}` : ''}`, { signal: AbortSignal.timeout(8000) }),
+        fetchCloudGet('fred', 'health=1', 5000),
+        fetchCloudGet('finmind', fmQs, 8000),
       ]);
       if (fredR.ok && finR.ok) {
         const fredJ = await fredR.json();
@@ -215,16 +282,17 @@ async function checkProxyHealth() {
         if (typeof updateMobileSettingsUI === 'function') updateMobileSettingsUI();
         el.className = 'data-badge data-live';
         const builtIn = window._cloudHasFred && window._cloudFinMindValid;
+        const plat = cloudProviderLabel();
         if (window._cloudHasFinMind && !window._cloudFinMindValid) {
           el.className = 'data-badge data-error';
-          el.textContent = '● 雲端 FinMind Token 失效';
-          el.title = 'Netlify 的 FINMIND_TOKEN 已過期。請至「設定」填入新 Token，或更新 Netlify 環境變數。';
+          el.textContent = `● 雲端 FinMind Token 失效`;
+          el.title = `${plat} 的 FINMIND_TOKEN 已過期。請至「設定」填入新 Token，或更新 ${plat} 環境變數。`;
           return false;
         }
-        el.textContent = builtIn ? '● 雲端已就緒（免填 Token）' : '● 雲端代理已就緒';
+        el.textContent = builtIn ? `● ${plat} 已就緒（免填 Token）` : `● ${plat} 代理已就緒`;
         el.title = builtIn
-          ? 'Netlify 已內建 FinMind + FRED，手機開即用'
-          : 'Netlify 函式 · 若資料失敗請在 Netlify 後台加 FINMIND_TOKEN / FRED_API_KEY';
+          ? `${plat} 已內建 FinMind + FRED，手機開即用`
+          : `${plat} 雲端函式 · 若資料失敗請加 FINMIND_TOKEN / FRED_API_KEY`;
         return true;
       }
     } catch (_) {}
@@ -295,15 +363,14 @@ async function fetchFinMind(params) {
   Object.entries(params).forEach(([k, v]) => qs.set(k, v));
 
   const fetchers = [];
-  const cloudFetch = (withUserToken) => {
-    const qCloud = new URLSearchParams(qs);
-    if (withUserToken && token) qCloud.set('token', token);
-    return async () => fetch(`${cloudFn('finmind')}?${qCloud.toString()}`, { signal: AbortSignal.timeout(60000) });
-  };
-
   if (isCloudDeployed()) {
-    if (token) fetchers.push(cloudFetch(true));
-    fetchers.push(cloudFetch(false));
+    await resolveCloudProvider();
+    const tokenModes = token ? [true, false] : [false];
+    for (const withUserToken of tokenModes) {
+      const qCloud = new URLSearchParams(qs);
+      if (withUserToken && token) qCloud.set('token', token);
+      fetchers.push(() => fetchCloudGet('finmind', qCloud.toString()));
+    }
   } else if (token) {
     fetchers.push(
       () => fetch(proxyUrl(`/finmind?${qs.toString()}&token=${encodeURIComponent(token)}`), { signal: AbortSignal.timeout(60000) }),
@@ -322,9 +389,9 @@ async function fetchFinMind(params) {
   }
 
   let lastErr = isCloudDeployed() && !token && window._cloudFinMindValid === false
-    ? 'Netlify 雲端 FinMind Token 已失效。請至「設定」填入您的 FinMind Token。'
+    ? `雲端 FinMind Token 已失效。請至「設定」填入您的 FinMind Token。`
     : isCloudDeployed() && !token
-      ? 'FinMind 未設定：請在 Netlify 後台加 FINMIND_TOKEN，或至設定填入 Token'
+      ? `FinMind 未設定：請在 ${cloudProviderLabel()} 後台加 FINMIND_TOKEN，或至設定填入 Token`
       : 'FinMind 連線失敗';
   for (const f of fetchers) {
     try {
@@ -333,7 +400,7 @@ async function fetchFinMind(params) {
       if (json.code === 'TOKEN_ILLEGAL' || /Token is illegal/i.test(json.msg || json.error || '')) {
         lastErr = token
           ? 'FinMind Token 無效，請至設定重新填入 finmindtrade.com 取得的新 Token'
-          : 'Netlify 雲端 FinMind Token 已失效。請至「設定」分頁填入您的 FinMind Token 後按儲存。';
+          : `${cloudProviderLabel()} 雲端 FinMind Token 已失效。請至「設定」分頁填入您的 FinMind Token 後按儲存。`;
         continue;
       }
       if (json.error) {
@@ -644,14 +711,22 @@ function yahooChartToBars(json, startDate, endDate) {
 /** 經後端代理（Netlify / 本機 8787）抓 Yahoo Chart，避開 CORS 與公開代理不穩 */
 async function fetchYahooChartViaServer(queryString) {
   const urls = [];
-  if (isCloudDeployed()) urls.push(`${cloudFn('yahoo')}?${queryString}`);
-  urls.push(
-    proxyUrl(`/yahoo?${queryString}`),
-    `http://127.0.0.1:8787/yahoo?${queryString}`,
-    `http://localhost:8787/yahoo?${queryString}`,
-  );
+  if (isCloudDeployed()) {
+    await resolveCloudProvider();
+    for (const base of cloudFnBases('yahoo')) {
+      urls.push(`${base}?${queryString}`);
+    }
+  } else {
+    urls.push(
+      proxyUrl(`/yahoo?${queryString}`),
+      `http://127.0.0.1:8787/yahoo?${queryString}`,
+      `http://localhost:8787/yahoo?${queryString}`,
+    );
+  }
 
-  let lastErr = 'Yahoo 代理連線失敗（Netlify 或本機 python local-proxy.py）';
+  let lastErr = isCloudDeployed()
+    ? 'Yahoo 雲端代理連線失敗'
+    : 'Yahoo 代理連線失敗（Netlify / Cloudflare 或本機 python local-proxy.py）';
   for (const url of urls) {
     try {
       const r = await fetchWithTimeout(url, 45000);
@@ -847,9 +922,14 @@ async function fetchFredSeriesRaw(seriesId, limit) {
 
   const fetchers = isCloudDeployed()
     ? [
-        () => fetchWithTimeout(`${cloudFn('fred')}?${q}`, 20000).then(toJson),
-        ...(key ? [() => fetchWithTimeout(`${cloudFn('fred')}?${qk}`, 20000).then(toJson)] : []),
-        () => fetchWithTimeout(`/api/fred?${qk}`, 20000).then(toJson),
+        async () => {
+          await resolveCloudProvider();
+          return toJson(await fetchCloudGet('fred', q, 20000));
+        },
+        ...(key ? [async () => {
+          await resolveCloudProvider();
+          return toJson(await fetchCloudGet('fred', qk, 20000));
+        }] : []),
       ]
     : (() => {
         if (!key) throw new Error('請點右上角 FRED 填入 API Key');
@@ -950,8 +1030,16 @@ async function fetchFredHistorical(seriesId, startDate, endDate) {
 
   const fetchers = [];
   if (isCloudDeployed()) {
-    fetchers.push(() => fetchFredJson(`${cloudFn('fred')}?${q}`).then(parseObs));
-    if (key) fetchers.push(() => fetchFredJson(`${cloudFn('fred')}?${qk}`).then(parseObs));
+    fetchers.push(async () => {
+      await resolveCloudProvider();
+      return parseObs(await (await fetchCloudGet('fred', q, 15000)).json());
+    });
+    if (key) {
+      fetchers.push(async () => {
+        await resolveCloudProvider();
+        return parseObs(await (await fetchCloudGet('fred', qk, 15000)).json());
+      });
+    }
   }
   if (key) {
     fetchers.push(
@@ -970,7 +1058,7 @@ async function fetchFredHistorical(seriesId, startDate, endDate) {
     }
   }
 
-  if (!fetchers.length) throw new Error('需 FRED API Key（設定面板或 Netlify FRED_API_KEY）');
+  if (!fetchers.length) throw new Error(`需 FRED API Key（設定面板或 ${cloudProviderLabel()} FRED_API_KEY）`);
 
   let lastErr = 'FRED 歷史資料載入失敗';
   for (const f of fetchers) {
@@ -1388,7 +1476,7 @@ async function tryFetchJson(urls, timeout) {
 function proxyBases(localPath, customKey) {
   const custom = (localStorage.getItem(customKey) || '').trim();
   if (isCloudDeployed()) {
-    return [cloudFn(localPath), `/api/${localPath}`, ...(custom ? [custom] : [])];
+    return [...cloudFnBases(localPath), ...(custom ? [custom] : [])];
   }
   const host = getProxyHost();
   return [
@@ -1396,8 +1484,7 @@ function proxyBases(localPath, customKey) {
     `http://127.0.0.1:8787/${localPath}`,
     `http://localhost:8787/${localPath}`,
     ...(custom ? [custom] : []),
-    cloudFn(localPath),
-    `/api/${localPath}`,
+    ...cloudFnBases(localPath),
   ];
 }
 
@@ -3449,7 +3536,7 @@ if ('serviceWorker' in navigator) {
     _swReloaded = true;
     location.reload();
   });
-  navigator.serviceWorker.register('sw.js?v=42').then((reg) => {
+  navigator.serviceWorker.register('sw.js?v=43').then((reg) => {
     reg.update();
     setInterval(() => reg.update(), 60 * 60 * 1000);
   }).catch(() => {});

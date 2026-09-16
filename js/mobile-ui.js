@@ -34,14 +34,14 @@ function updateMobileSettingsUI() {
   const cloudTokenBad = window._cloudHasFinMind && window._cloudFinMindValid === false;
   if (cloudOk) {
     hint.style.display = 'block';
-    hint.innerHTML = '✓ Netlify 已內建 FinMind + FRED，手機<strong>免填 Token</strong>，開啟即用。';
+    hint.innerHTML = `✓ ${cloudProviderLabel()} 已內建 FinMind + FRED，手機<strong>免填 Token</strong>，開啟即用。`;
     if (block) block.style.display = 'none';
   } else {
     hint.style.display = cloudTokenBad ? 'none' : 'block';
     if (block) block.style.display = 'block';
     if (cloudTokenBad && pwaHint) {
       pwaHint.style.display = 'block';
-      pwaHint.innerHTML = '⚠️ Netlify 雲端 FinMind Token <strong>已失效</strong>。請在下方填入 <a href="https://finmindtrade.com" target="_blank" rel="noopener" style="color:var(--accent);">finmindtrade.com</a> 的新 Token 後按「儲存並重新載入」。';
+      pwaHint.innerHTML = `⚠️ ${typeof cloudProviderLabel === 'function' ? cloudProviderLabel() : '雲端'} FinMind Token <strong>已失效</strong>。請在下方填入 <a href="https://finmindtrade.com" target="_blank" rel="noopener" style="color:var(--accent);">finmindtrade.com</a> 的新 Token 後按「儲存並重新載入」。`;
     }
   }
 }
@@ -54,7 +54,7 @@ function updateMobileTokenStatus() {
 
   if (window._cloudFinMindValid && !userToken) {
     el.className = 'data-badge data-live';
-    el.textContent = '● Token 由 Netlify 提供';
+    el.textContent = '● Token 由雲端提供';
     return;
   }
 

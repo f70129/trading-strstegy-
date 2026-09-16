@@ -30,8 +30,9 @@ node tests/parity.js                        # JS ↔ Python 一致性檢核
 
 | 平台 | 台股 FinMind | 美股 FRED | 個股搜尋 |
 |------|-------------|-----------|----------|
-| **Netlify**（推薦） | ✅ | ✅ 自動 | ✅ |
-| GitHub Pages | ✅ | ❌ 需另設 Worker | ✅ |
+| **Cloudflare Pages**（額度大） | ✅ | ✅ 自動 | ✅ |
+| **Netlify** | ✅ | ✅ 自動 | ✅ |
+| GitHub Pages | ⚠️ 需 Token | ❌ | ⚠️ |
 | 本機 `http.server` | ✅ | 需 Worker 網址 | ✅ |
 
 ### Netlify 一鍵部署（含 FRED）

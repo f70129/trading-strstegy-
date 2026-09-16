@@ -23,9 +23,9 @@ export async function onRequest(context) {
     return json({ error: 'series_id required' }, 400, cors);
   }
 
-  const apiKey = env.FRED_API_KEY;
+  const apiKey = searchParams.get('key') || env.FRED_API_KEY;
   if (!apiKey) {
-    return json({ error: 'FRED_API_KEY 未設定（Pages → Settings → Environment variables）' }, 500, cors);
+    return json({ error: 'FRED Key 未設定（設定面板填入，或 Pages 環境變數 FRED_API_KEY）' }, 400, cors);
   }
 
   const limit = searchParams.get('limit') || '';

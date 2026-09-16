@@ -86,6 +86,39 @@ git push -u origin main
 
 > Token 存在 Netlify 伺服器，不會出現在 GitHub 程式碼中。
 
+## Cloudflare Pages 部署（Netlify 額度不足時推薦）
+
+v43 起支援 **Netlify / Cloudflare 雙平台**，程式會自動偵測並走正確的 API 路徑。
+
+### 步驟
+
+1. 登入 [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **Create** → **Pages** → **Connect to Git**
+2. 選同一個 GitHub repo
+3. **Build command** 留空，**Build output directory** 填 `.`
+4. Deploy 完成後，網址類似：`https://你的專案.pages.dev/mobile.html`
+5. **Settings → Environment variables**（Production）新增：
+
+| Key | Value |
+|-----|-------|
+| `FINMIND_TOKEN` | 你的 FinMind token |
+| `FRED_API_KEY` | 你的 FRED key |
+
+6. **Redeploy** 一次讓環境變數生效
+
+### 雲端 API 對照
+
+| 功能 | Netlify | Cloudflare Pages |
+|------|---------|------------------|
+| FinMind | `/.netlify/functions/finmind` | `/api/finmind` |
+| FRED | `/.netlify/functions/fred` | `/api/fred` |
+| Yahoo | `/.netlify/functions/yahoo` | `/api/yahoo` |
+| TWSE 即時 | `/.netlify/functions/twse` | `/api/twse` |
+| 台指期 | `/.netlify/functions/taifex` | `/api/taifex` |
+
+成功後右上角顯示 **「● Cloudflare 已就緒（免填 Token）」** 或 **「● Cloudflare 代理已就緒」**。
+
+> Cloudflare 免費額度：靜態流量無限、Functions 每日約 10 萬次，個人看板通常比 Netlify 更耐用。
+
 ## 部署後驗證
 
 右上角應顯示 **「● 雲端代理已就緒」**，載入 2330 / 加權 / 台指 有即時報價即成功。
