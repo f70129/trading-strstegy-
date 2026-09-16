@@ -4,7 +4,8 @@
   "description": "Static HTML trading dashboard — no npm build",
   "scripts": {
     "build": "node -e \"console.log('Static site ready')\"",
-    "deploy": "wrangler pages deploy . --project-name=trading-strstegy --commit-dirty=true"
+    "deploy": "node -e \"console.log('OK: Cloudflare Git Pages publishes ./ automatically')\"",
+    "deploy:wrangler": "wrangler pages deploy . --project-name=trading-strstegy --commit-dirty=true"
   },
   "devDependencies": {
     "wrangler": "^4.132.0"

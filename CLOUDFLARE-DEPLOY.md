@@ -34,7 +34,7 @@ Could not detect a directory containing static files
 | Framework preset | **None** |
 | Build command | **留空**（或 `npm run build`） |
 | Build output directory | **`.`**（一個點，代表 repo 根目錄） |
-| Deploy command | **留空**；若介面強制必填 → 改填 **`npm run deploy`**（勿用 `npx wrangler deploy`） |
+| Deploy command | **留空**；若強制必填 → **`npm run deploy`**（no-op，由 Git Pages 自動發布 `./`） |
 
 ### 4. 環境變數
 
@@ -62,7 +62,20 @@ Could not detect a directory containing static files
 |------|------|------|
 | pip install streamlit | 連到錯的 repo／分支，或 Build 設錯 | 確認 repo 根目錄有 `index.html`，Build 留空 |
 | `wrangler deploy` 找不到 static | Deploy 用了 Workers 指令 | 改填 **`npm run deploy`**（內建 `wrangler pages deploy`） |
-| Deploy command 無法刪除 | 新版 Cloudflare 介面強制必填 | 填 **`npm run deploy`**，專案名須為 `trading-strstegy` |
+| Deploy command 無法刪除 | 新版 Cloudflare 介面強制必填 | 填 **`npm run deploy`**（勿用 `wrangler deploy`） |
+| Authentication error 10000 | `wrangler pages deploy` 需 Pages 寫入 Token | 用 **`npm run deploy`**；或自建 Token 後改 **`npm run deploy:wrangler`** |
+
+### Deploy command 無法刪除 + Auth 10000
+
+Cloudflare 建置環境內建 Token **不能** 執行 `wrangler pages deploy`（會 Authentication error）。
+
+**解法 A（建議）**：Deploy command 維持 `npm run deploy`（只印 OK，實際由 **Build output directory = `.`** 自動上線）。
+
+**解法 B**（若 A 後網站仍空白）：到 [API Tokens](https://dash.cloudflare.com/profile/api-tokens) 建立 Token：
+
+- 權限：**Account → Cloudflare Pages → Edit**
+- 加到 Pages **Environment variables**：`CLOUDFLARE_API_TOKEN` = 該 Token
+- Deploy command 改：`npm run deploy:wrangler`
 | `/api/finmind` 404 | Functions 未部署 | 確認 repo 有 `functions/api/` 資料夾 |
 | Token 失效 | 環境變數未設 | 填 `FINMIND_TOKEN` 後 Redeploy |
 
