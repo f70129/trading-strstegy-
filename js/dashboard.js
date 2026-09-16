@@ -87,7 +87,7 @@ function isValidTaiexClose(close) {
 function finMindPriceRowsToDailyBars(rows) {
   const bars = [];
   for (const r of rows || []) {
-    const close = Number(r.close ?? r.closing_index);
+    const close = Number(r.close ?? r.closing_index ?? r.price ?? r.TAIEX);
     if (!isValidTaiexClose(close)) continue;
     bars.push({
       date: String(r.date).slice(0, 10),
@@ -438,16 +438,16 @@ function recentWeekdays(count) {
   return out;
 }
 
-async function fetchTaiexDailyHistory(days = 90, onProgress) {
+async function fetchTaiexDailyHistory(days = 90, onProgress, minBarsOverride) {
   const endDate = new Date().toISOString().slice(0, 10);
   const start = new Date();
   start.setDate(start.getDate() - Math.ceil(days * 1.6));
   const startDate = start.toISOString().slice(0, 10);
-  const minBars = Math.min(days, Math.max(50, Math.floor(days * 0.55)));
+  const minBars = minBarsOverride ?? Math.min(days, Math.max(50, Math.floor(days * 0.55)));
 
   const finmindStrategies = [
-    { dataset: 'TaiwanStockPrice', data_id: 'TAIEX', label: 'TAIEX 日K' },
-    { dataset: 'TaiwanStockPrice', data_id: '001', label: '加權 001' },
+    { dataset: 'TaiwanStockTotalReturnIndex', data_id: 'TAIEX', label: 'FinMind 加權 TAIEX' },
+    { dataset: 'TaiwanStockTotalReturnIndex', data_id: 'TPEx', label: 'FinMind 櫃買 TPEx' },
   ];
 
   let best = [];
@@ -478,12 +478,14 @@ async function fetchTaiexDailyHistory(days = 90, onProgress) {
     const yahoo = (await fetchYahooTwiiDailyBars(days)).slice(-days);
     if (yahoo.length > best.length) best = yahoo;
     if (onProgress) onProgress(3, 3);
-    if (best.length >= minBars || best.length >= 30) return best;
-    lastErr = `Yahoo ^TWII 僅 ${best.length} 筆`;
+    if (best.length >= minBars) return best;
+    lastErr = `${lastErr} · Yahoo ^TWII 僅 ${best.length} 筆`;
   } catch (e) {
     lastErr = `${lastErr} · ${e.message || 'Yahoo 備援失敗'}`;
   }
 
+  if (best.length >= minBars) return best;
+  if (minBars <= 5 && best.length >= 2) return best;
   if (best.length >= 30) return best;
   throw new Error(lastErr);
 }
@@ -1115,8 +1117,7 @@ async function fetchTaiexIndexHistorical(startDate, endDate) {
   } catch (_) { /* ignore */ }
 
   const strategies = [
-    { dataset: 'TaiwanStockPrice', data_id: 'TAIEX', label: '加權 TAIEX' },
-    { dataset: 'TaiwanStockPrice', data_id: '001', label: '加權 001' },
+    { dataset: 'TaiwanStockTotalReturnIndex', data_id: 'TAIEX', label: 'FinMind 加權 TAIEX' },
   ];
 
   let lastErr = '台股加權歷史資料不足';
@@ -3182,8 +3183,8 @@ async function loadSymbol() {
 async function fetchMarketOverviewItem(idx) {
   try {
     if (idx.finmind) {
-      const hist = await fetchTaiexDailyHistory(30);
-      if (hist.length < 2) throw new Error('加權資料不足');
+      const hist = await fetchTaiexDailyHistory(60, null, 5);
+      if (hist.length < 2) throw new Error('FinMind 加權日線不足');
       const closes = hist.map(h => h.close);
       const mas = calcAllMA(closes);
       let price = closes[closes.length - 1];
