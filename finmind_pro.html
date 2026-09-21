@@ -474,12 +474,20 @@ function normMargin(raw){
 /* ---------- 盤中即時報價（證交所 MIS，經同網域 /api/twse 代理；僅部署站可用）---------- */
 function num(x){const v=parseFloat(x);return isFinite(v)?v:null;}
 function misDate(d){return (d&&d.length>=8)?`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`:null;}
+function topOf(s){if(!s)return null;return num(String(s).split('_')[0]);}
 function parseMis(m){
-  const z=num(m.z),o=num(m.o);
-  if(z==null&&o==null)return null;      // 尚未成交／非交易時段：無盤中價
-  const price=z??o;
-  return {price,open:o??price,high:num(m.h)??price,low:num(m.l)??price,
-    prevClose:num(m.y),vol:num(m.v),date:misDate(m.d),time:m.t||''};
+  const z=num(m.z);                       // 最新成交價
+  const bid=topOf(m.b), ask=topOf(m.a);   // 最佳買/賣（五檔第一檔）
+  const mid=(bid!=null&&ask!=null)?(bid+ask)/2:(bid!=null?bid:ask);
+  // 現價優先序：成交價 z → 最佳買賣中價；兩者皆無 → 視為非即時。
+  // 絕不拿開盤價 o 當現價（會造成現價=開盤的錯誤）
+  const price = z!=null ? z : mid;
+  if(price==null) return null;
+  const o=num(m.o),h=num(m.h),l=num(m.l);
+  try{console.log('[MIS 即時原始]',{代號:m.c,名稱:m.n,成交z:m.z,最佳買b:m.b,最佳賣a:m.a,開o:m.o,高h:m.h,低l:m.l,昨收y:m.y,累量v:m.v,時間t:m.t,日期d:m.d,'→採用現價':price});}catch(e){}
+  return {price, open:o, high:(h!=null?Math.max(h,price):price),
+    low:(l!=null?Math.min(l,price):price), prevClose:num(m.y),
+    vol:num(m.v), date:misDate(m.d), time:m.t||'', src:z!=null?'成交價':'買賣中價'};
 }
 async function fetchRealtime(id){
   for(const ex of ['tse','otc']){
@@ -519,7 +527,7 @@ function scheduleRealtime(id){
   pollTimer=setInterval(async()=>{
     if(!inMarketHours())return;
     const rt=await fetchRealtime(id);
-    if(rt&&mergeRealtime(rt)){setStatus('live-rt',rt.time);updateHeader(id,currentName);renderAll();}
+    if(rt&&mergeRealtime(rt)){setStatus('live-rt',rt.time+(rt.src?' · '+rt.src:''));updateHeader(id,currentName);renderAll();}
   },20000);
 }
 
@@ -560,7 +568,7 @@ async function loadAll(){
   if(live){
     const rt=await fetchRealtime(id);
     if(rt&&mergeRealtime(rt)){
-      rtOK=true; setStatus('live-rt',rt.time); updateHeader(id,name); renderAll();
+      rtOK=true; setStatus('live-rt',rt.time+(rt.src?' · '+rt.src:'')); updateHeader(id,name); renderAll();
       document.getElementById('rangeTxt').textContent=`${PRICE[0].date} → ${PRICE.at(-1).date} · 含盤中`;
     }
   }
