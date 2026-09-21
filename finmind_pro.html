@@ -686,11 +686,21 @@ async function twdGet(start){
   return await yGet('TWD=X','6mo');
 }
 async function vixGet(start){
+  // 主來源：FinMind 台指選擇權波動率指數（跨域可直接抓，本機/artifact 亦可）
+  try{
+    const rows=await fm('TaiwanOptionVix','',start);
+    const out=(rows||[]).map(r=>{
+      const v=+(r.vix ?? r.value ?? r.VIX ?? r.option_vix ?? r.TaiwanOptionVix);
+      return (isFinite(v)&&r.date)?{date:r.date,v:+v.toFixed(2)}:null;
+    }).filter(Boolean);
+    if(out.length)return out;
+  }catch(e){}
+  // 備援：期交所 TAIFEX 代理（僅部署站可用）
   try{
     const r=await fetch(`/api/taifexvix?start=${start}`);
-    if(!r.ok)return[]; const j=await r.json();
-    return (j.data||[]).map(x=>({date:x.date,v:+x.vix})).filter(x=>isFinite(x.v));
-  }catch(e){return[];}
+    if(r.ok){const j=await r.json();const o=(j.data||[]).map(x=>({date:x.date,v:+x.vix})).filter(x=>isFinite(x.v));if(o.length)return o;}
+  }catch(e){}
+  return [];
 }
 async function loadMacro(){
   if(MACRO_LOADING)return; MACRO_LOADING=true;
