@@ -281,16 +281,10 @@ footer b{color:var(--ink-2)}
       <div class="body"><div id="chart-macd" class="echart" style="height:190px"></div></div>
     </section>
 
-    <!-- KD -->
-    <section class="card col-4">
-      <div class="hd"><span class="t">KD 隨機指標</span><span class="s">9 · 3 · 3</span><div class="meta" id="kdMeta"></div></div>
-      <div class="body"><div id="chart-kd" class="echart" style="height:190px"></div></div>
-    </section>
-
-    <!-- RSI -->
-    <section class="card col-4">
-      <div class="hd"><span class="t">RSI 相對強弱</span><span class="s">6 · 14</span><div class="meta" id="rsiMeta"></div></div>
-      <div class="body"><div id="chart-rsi" class="echart" style="height:190px"></div></div>
+    <!-- 大盤環境 (VIXTWN / TAIEX / USD-TWD 三堆疊) -->
+    <section class="card col-8">
+      <div class="hd"><span class="t">大盤環境</span><span class="s">VIXTWN · 加權指數 · 台美匯率（各自刻度、共用時間軸）</span><div class="meta" id="macroMeta"></div></div>
+      <div class="body"><div id="chart-macro" class="echart" style="height:300px"></div></div>
     </section>
 
     <!-- Institutional -->
@@ -578,6 +572,7 @@ async function loadAll(){
       ? '盤中現價來自證交所 MIS 即時行情（同網域 /api/twse 代理），交易時段約每 20 秒更新，並以最新即時價重算所有技術指標；日K、法人與融資券歷史來自 FinMind。'
       : 'FinMind 提供日K（收盤）資料——盤中即時報價需將本頁部署於含 /api/twse 代理的網域（例如 trading-strstegy.pages.dev）方能顯示；目前為最新收盤。';
   scheduleRealtime(id);
+  loadMacro(); // 大盤環境（VIXTWN / 加權 / 匯率），與個股無關，載入後自動繪圖
 }
 function setStatus(mode,extra){
   const dot=document.getElementById('statusDot'),tx=document.getElementById('statusTxt'),lbl=document.getElementById('priceLbl');
@@ -609,7 +604,7 @@ function updateHeader(id,name){
 /* ---------- render orchestrator ---------- */
 function renderAll(){
   if(!PRICE.length)return;
-  [renderMain,renderMACD,renderKD,renderRSI,renderInst,renderMargin,renderScore,renderLevels,renderSignals]
+  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro]
     .forEach(fn=>{try{fn();}catch(e){console.error(fn.name,e);}});
   requestAnimationFrame(()=>Object.values(charts).forEach(c=>c&&c.resize()));
 }
@@ -665,31 +660,83 @@ function renderMACD(){
   const o=m.osc.at(-1)||0;
   metaChip('macdMeta',o>=0?'up':'down',(o>=0?'紅棒 ':'綠棒 ')+o.toFixed(2));
 }
-function renderKD(){
-  const p=pal(),c=mk('chart-kd');if(!c)return;
-  c.setOption({animation:false,tooltip:baseTip(p),grid:{left:34,right:12,top:12,bottom:22},
-    xAxis:{type:'category',data:shortDates(),axisLabel:{color:p.muted,fontSize:9},axisLine:{lineStyle:{color:p.border}},axisTick:{show:false}},
-    yAxis:{min:0,max:100,interval:50,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9},axisLine:{show:false},axisTick:{show:false}},
-    series:[
-      {name:'K',type:'line',data:IND.kd.K.map(v=>v==null?null:+v.toFixed(1)),showSymbol:false,lineStyle:{width:1.5,color:p.warn},
-        markArea:{silent:true,itemStyle:{color:'rgba(120,120,120,.06)'},data:[[{yAxis:80},{yAxis:100}],[{yAxis:0},{yAxis:20}]]}},
-      {name:'D',type:'line',data:IND.kd.D.map(v=>v==null?null:+v.toFixed(1)),showSymbol:false,lineStyle:{width:1.5,color:p.accent}}
-    ]},true);
-  const k=IND.kd.K.at(-1),d=IND.kd.D.at(-1);
-  metaChip('kdMeta',k>d?'up':'down',`K ${k.toFixed(0)} / D ${d.toFixed(0)}`);
+/* ---------- 大盤環境：VIXTWN / 加權指數 / 台美匯率（三堆疊，各自刻度）---------- */
+let MACRO=null, MACRO_LOADING=false;
+async function yGet(sym,range){
+  try{
+    const r=await fetch(`/api/yahoo?symbol=${encodeURIComponent(sym)}&range=${range}&interval=1d`);
+    if(!r.ok)return[]; const j=await r.json();
+    const res=j&&j.chart&&j.chart.result&&j.chart.result[0]; if(!res)return[];
+    const ts=res.timestamp||[], q=res.indicators&&res.indicators.quote&&res.indicators.quote[0], cl=(q&&q.close)||[];
+    const out=[]; ts.forEach((t,i)=>{ if(cl[i]!=null)out.push({date:new Date(t*1000).toISOString().slice(0,10),v:+cl[i]}); });
+    return out;
+  }catch(e){return[];}
 }
-function renderRSI(){
-  const p=pal(),c=mk('chart-rsi');if(!c)return;
-  c.setOption({animation:false,tooltip:baseTip(p),grid:{left:34,right:12,top:12,bottom:22},
-    xAxis:{type:'category',data:shortDates(),axisLabel:{color:p.muted,fontSize:9},axisLine:{lineStyle:{color:p.border}},axisTick:{show:false}},
-    yAxis:{min:0,max:100,interval:50,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9},axisLine:{show:false},axisTick:{show:false}},
-    series:[
-      {name:'RSI6',type:'line',data:IND.rsi6.map(v=>v==null?null:+v.toFixed(1)),showSymbol:false,lineStyle:{width:1.5,color:p.up},
-        markLine:{symbol:'none',silent:true,data:[{yAxis:70,lineStyle:{color:p.muted,type:'dashed',width:1}},{yAxis:30,lineStyle:{color:p.muted,type:'dashed',width:1}}]}},
-      {name:'RSI14',type:'line',data:IND.rsi14.map(v=>v==null?null:+v.toFixed(1)),showSymbol:false,lineStyle:{width:1.5,color:p.accent}}
-    ]},true);
-  const r=IND.rsi14.at(-1);
-  metaChip('rsiMeta',r>70?'up':r<30?'down':'neu',`14 = ${r.toFixed(1)}`);
+async function twdGet(start){
+  // 優先 FinMind 台銀牌告匯率（跨域可直接抓）；退回 Yahoo TWD=X
+  try{
+    const rows=await fm('TaiwanExchangeRate','USD',start);
+    const out=(rows||[]).filter(r=>!r.currency||r.currency==='USD').map(r=>{
+      const sb=+r.spot_buy,ss=+r.spot_sell,cb=+r.cash_buy,cs=+r.cash_sell;
+      let v=(sb>0&&ss>0)?(sb+ss)/2:((cb>0&&cs>0)?(cb+cs)/2:NaN);
+      return isFinite(v)?{date:r.date,v:+v.toFixed(3)}:null;
+    }).filter(Boolean);
+    if(out.length)return out;
+  }catch(e){}
+  return await yGet('TWD=X','6mo');
+}
+async function vixGet(start){
+  try{
+    const r=await fetch(`/api/taifexvix?start=${start}`);
+    if(!r.ok)return[]; const j=await r.json();
+    return (j.data||[]).map(x=>({date:x.date,v:+x.vix})).filter(x=>isFinite(x.v));
+  }catch(e){return[];}
+}
+async function loadMacro(){
+  if(MACRO_LOADING)return; MACRO_LOADING=true;
+  const start=daysAgo(200);
+  const [vix,taiex,twd]=await Promise.all([vixGet(start),yGet('^TWII','6mo'),twdGet(start)]);
+  const set=new Set(); [vix,taiex,twd].forEach(a=>a.forEach(pt=>set.add(pt.date)));
+  const dates=[...set].sort();
+  const toArr=a=>{const m={};a.forEach(pt=>m[pt.date]=pt.v);return dates.map(d=>d in m?m[d]:null);};
+  MACRO={dates,sV:toArr(vix),sT:toArr(taiex),sX:toArr(twd)};
+  const miss=[]; if(!vix.length)miss.push('VIXTWN'); if(!taiex.length)miss.push('加權指數'); if(!twd.length)miss.push('匯率');
+  metaChip('macroMeta', miss.length?'warn':'up', miss.length? `${3-miss.length}/3 · 缺 ${miss.join('、')}` : '3/3 即時載入');
+  MACRO_LOADING=false;
+  drawMacro();
+}
+function drawMacro(){
+  const el=document.getElementById('chart-macro'); if(!el)return;
+  const c=mk('chart-macro'); const p=pal();
+  if(!MACRO){ c.setOption({graphic:{type:'text',left:'center',top:'middle',style:{text:'載入大盤環境資料…',fill:p.muted,font:'12px sans-serif'}}},true); return; }
+  const {dates,sV,sT,sX}=MACRO;
+  if(!sV.some(v=>v!=null)&&!sT.some(v=>v!=null)&&!sX.some(v=>v!=null)){
+    c.setOption({graphic:{type:'text',left:'center',top:'middle',style:{text:'大盤環境資料需部署於含 /api 代理的網域方能顯示',fill:p.muted,font:'12px sans-serif'}}},true); return;
+  }
+  const rows=[
+    {name:'VIXTWN',data:sV,color:p.warn,fmt:v=>v.toFixed(2),isIdx:false},
+    {name:'加權指數',data:sT,color:p.accent,fmt:v=>Math.round(v).toLocaleString('en-US'),isIdx:true},
+    {name:'台美匯率',data:sX,color:'#a78bfa',fmt:v=>v.toFixed(3),isIdx:false}
+  ];
+  const tops=['7%','40%','73%'], H='21%';
+  const grids=[],xAxes=[],yAxes=[],series=[];
+  rows.forEach((r,i)=>{
+    grids.push({left:66,right:70,top:tops[i],height:H});
+    xAxes.push({type:'category',gridIndex:i,data:dates,boundaryGap:false,
+      axisLabel:{show:i===2,color:p.muted,fontSize:9},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}});
+    yAxes.push({type:'value',gridIndex:i,scale:true,name:r.name,nameTextStyle:{color:r.color,fontSize:10,fontWeight:600,align:'left'},nameGap:7,
+      splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9,formatter:v=>r.isIdx?Math.round(v):v},axisLine:{show:false},axisTick:{show:false}});
+    const has=r.data.some(v=>v!=null);
+    series.push({name:r.name,type:'line',xAxisIndex:i,yAxisIndex:i,data:r.data,showSymbol:false,connectNulls:true,
+      lineStyle:{width:1.6,color:r.color},
+      areaStyle:{color:'transparent'},
+      endLabel:{show:has,color:r.color,fontSize:10,fontWeight:600,formatter:o=>(o.value==null?'':r.fmt(+o.value))}});
+  });
+  c.setOption({animation:false,
+    tooltip:{trigger:'axis',backgroundColor:p.panel,borderColor:p.border,borderWidth:1,textStyle:{color:p.ink,fontSize:11},
+      valueFormatter:v=>v==null?'—':(+v).toLocaleString('en-US',{maximumFractionDigits:3})},
+    axisPointer:{link:[{xAxisIndex:'all'}],label:{backgroundColor:p.muted}},
+    grid:grids,xAxis:xAxes,yAxis:yAxes,series:series},true);
 }
 function renderInst(){
   const p=pal(),c=mk('chart-inst');if(!c)return;
