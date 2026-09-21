@@ -93,14 +93,23 @@ SMI             = zBig − 0.5 × zRetail                   （散戶反向）
   欄位名容錯比對。預設關閉，於「設定 → 漲跌家數過濾」開啟；回測也會一併套用（自動抓當日漲跌家數）。
 - 所有參數可在「設定」調整；「回測 → 網格搜尋」會跑 108 組並可一鍵套用。
 
+### AAII 散戶情緒投票（反向指標，情緒參考卡）
+- 資料來源：AAII Investor Sentiment Survey（美國散戶每週看多／中立／看空調查，每週四更新）。
+- 由伺服器端函式（`/.netlify/functions/aaii`、`/api/aaii`）抓 `aaii.com` 並容錯解析百分比，
+  避開瀏覽器 CORS；抓不到時可在「即時」頁**手動輸入**本週三個數字（存於 `localStorage`）。
+- 看板顯示多／中／空長條、多空差（Bullish − Bearish，長期均值約 +6.5）與**反向解讀**：
+  看多 ≥ 50% 或多空差 ≥ +20 → 散戶過熱、追多保守；看空 ≥ 50% 或多空差 ≤ −20 → 散戶過度悲觀、追空保守。
+- **定位**：這是週更的美國散戶情緒，僅作長線情緒背景參考，**不介入台指盤中進出場**（不寫進進場濾網），
+  與盤中「漲跌家數」濾網分屬不同時間尺度。解讀邏輯在 `SM.interpretAAII()`，有單元測試涵蓋。
+
 ---
 
 ## 3. 檢核結果（本次交付）
 
 | 項目 | 方式 | 結果 |
 |---|---|---|
-| 引擎單元測試（JS） | `node tests/smartmoney-core.test.js` | 35 項全部通過 |
-| 引擎單元測試（Python） | `python smartmoney_engine.py --selftest` | 19 項全部通過 |
+| 引擎單元測試（JS） | `node tests/smartmoney-core.test.js` | 51 項全部通過（含漲跌家數濾網、AAII 情緒解讀） |
+| 引擎單元測試（Python） | `python smartmoney_engine.py --selftest` | 25 項全部通過 |
 | **跨語言一致性** | `node tests/parity.js`：同一組合成逐筆（6 個種子 + 8 組網格），JS 與 Python 的交易數、損益、SMI、排名 | 完全相同 |
 | 合成資料訊號偵測 | 大單淨流方向 vs 隱含趨勢一致率 | 82%（門檻 58%） |
 | 看板端對端（Playwright + 模擬 FinMind / Telegram 伺服器） | 檢核頁 / 即時輪詢 40 輪 / 重新整理還原狀態 / 盤後底牌 / 模擬頁 / 示範資料回測 / 108 組網格 / 套用參數 / 逐筆回測 | 全部通過，0 個 JS 錯誤 |
@@ -142,5 +151,6 @@ tests/smartmoney-core.test.js  JS 單元測試
 tests/parity.js                JS ↔ Python 一致性檢核
 netlify/functions/telegram.js  Telegram 代理（Netlify）；functions/api/telegram.js（Cloudflare）
 netlify/functions/finmind.js   新增 endpoint 參數（taiwan_futures_snapshot 等）；functions/api/finmind.js 同
+netlify/functions/aaii.js      AAII 散戶情緒代理（伺服器端抓 aaii.com 容錯解析）；functions/api/aaii.js（Cloudflare）同
 local-proxy.py                 本機代理：新增 /finmind?endpoint=… 與 POST /telegram
 ```

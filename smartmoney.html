@@ -9,7 +9,7 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <title>台指期聰明錢看板 · 大單/小單即時流向</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/smartmoney-core.js?v=11"></script>
+<script src="js/smartmoney-core.js?v=12"></script>
 <style>
 :root {
   --bg:#0a0e1a; --panel:#111827; --panel2:#0f172a; --border:#1f2d40;
@@ -87,6 +87,18 @@ pre.log{background:#050810;border:1px solid var(--border);border-radius:8px;padd
 .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--panel2);border:1px solid var(--border)}
 .muted{color:var(--muted)}
 .hint{font-size:11px;color:var(--muted);line-height:1.5}
+.in-mini{background:var(--panel2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:4px 6px;font-size:12px}
+.aaii-wrap{display:grid;grid-template-columns:1fr;gap:12px}
+.aaii-bars{display:flex;flex-direction:column;gap:8px}
+.aaii-row{display:flex;align-items:center;gap:8px}
+.aaii-row .lab{width:130px;font-size:12px;flex:none}
+.aaii-row .pct{width:56px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+.aaii-row .track{flex:1;height:14px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.aaii-row .fill{height:100%;width:0;transition:width .4s;border-radius:8px}
+.aaii-row .fill.bull{background:var(--green)}
+.aaii-row .fill.neu{background:var(--gold)}
+.aaii-row .fill.bear{background:var(--red)}
+@media (min-width:900px){.aaii-wrap{grid-template-columns:1.4fr 1fr;align-items:center}}
 @media (min-width:900px){
   body{padding-bottom:0}
   nav.tabs{position:sticky;top:auto;bottom:auto;height:44px;border-top:none;border-bottom:1px solid var(--border);justify-content:flex-start;padding:0 12px}
@@ -164,6 +176,30 @@ pre.log{background:#050810;border:1px solid var(--border);border-radius:8px;padd
         </tbody>
       </table></div>
       <div class="note" id="flowNote">流量來源：期貨逐筆 TaiwanFuturesTick（每筆成交價與口數，方向以 Tick Rule 判定；FinMind 無期貨內外盤欄位）。盤中約每 15 秒累加，收盤/盤前為 0 屬正常。</div>
+    </div>
+  </div>
+
+  <div class="panel" id="aaiiPanel">
+    <h2>AAII 散戶情緒投票 <span class="sub" id="aaiiMeta">美國散戶調查 · 週更（週四）· 反向指標</span></h2>
+    <div class="aaii-wrap">
+      <div class="aaii-bars">
+        <div class="aaii-row"><span class="lab">🐂 看多 Bullish</span><div class="track"><div class="fill bull" id="aaiiBullBar"></div></div><span class="pct" id="aaiiBull">—</span></div>
+        <div class="aaii-row"><span class="lab">😐 中立 Neutral</span><div class="track"><div class="fill neu" id="aaiiNeuBar"></div></div><span class="pct" id="aaiiNeu">—</span></div>
+        <div class="aaii-row"><span class="lab">🐻 看空 Bearish</span><div class="track"><div class="fill bear" id="aaiiBearBar"></div></div><span class="pct" id="aaiiBear">—</span></div>
+      </div>
+      <div class="aaii-side">
+        <div class="verdict neutral" id="aaiiVerdict" style="margin:0"><span class="big" id="aaiiSpread">—</span><span class="lab" id="aaiiLabel">等待資料</span></div>
+        <div class="note" id="aaiiNote" style="margin-top:6px">多空差 = 看多 − 看空（長期均值約 +6.5）。此為週更美國散戶情緒，僅作反向情緒參考，<b>不介入台指盤中進出場</b>。</div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px;align-items:center">
+      <button class="btn sm outline" id="btnAaii">🔄 更新情緒</button>
+      <span class="hint">抓不到時可手動輸入本週數字（AAII 官網每週四公布）：</span>
+      <input id="aaiiInBull" class="in-mini" type="number" step="0.1" placeholder="多%" style="width:64px">
+      <input id="aaiiInNeu" class="in-mini" type="number" step="0.1" placeholder="中%" style="width:64px">
+      <input id="aaiiInBear" class="in-mini" type="number" step="0.1" placeholder="空%" style="width:64px">
+      <button class="btn sm" id="btnAaiiSave">套用手動</button>
+      <span class="hint" id="aaiiSrc"></span>
     </div>
   </div>
 
@@ -509,6 +545,7 @@ const S = {
   demoTrades: null, demoIdx: 0, demoMinute: 0, lastSave: 0,
   tickCursor: {}, tickOk: {}, tickCount: {}, tickSrc: {}, tickTimer: null, tickRawLogged: {}, tickCodeMap: {},
   breadthByMin: {}, breadthLast: null, breadthErr: '',
+  aaii: null,
 };
 function taipeiNow() {
   const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }); // YYYY-MM-DD HH:mm:ss
@@ -674,6 +711,65 @@ async function pollBreadth() {
     if (b.last == null) { S.breadthErr = '漲跌家數欄位無法辨識，請把「檢核」的原始欄位截圖給開發者'; return; }
     S.breadthByMin = b.byMinute; S.breadthLast = b.last; S.breadthErr = '';
   } catch (e) { S.breadthErr = e.message; }
+}
+// ---------------- AAII 散戶情緒（反向指標，僅供參考，不介入盤中進出場）----------------
+const LS_AAII = 'sm_aaii_v1';
+function loadAaiiCache() { try { return JSON.parse(localStorage.getItem(LS_AAII) || 'null'); } catch (_) { return null; } }
+function saveAaiiCache(d) { try { localStorage.setItem(LS_AAII, JSON.stringify(d)); } catch (_) {} }
+async function fetchAAII() {
+  const attempts = isCloud()
+    ? ['/.netlify/functions/aaii', '/api/aaii', 'https://www.aaii.com/sentimentsurvey']
+    : ['https://www.aaii.com/sentimentsurvey'];
+  const errs = [];
+  for (const u of attempts) {
+    try {
+      const j = await fetchJson(u, {}, 15000);
+      if (j && j.ok && Number.isFinite(Number(j.bullish))) return { bullish: +j.bullish, neutral: +j.neutral, bearish: +j.bearish, asof: j.asof || '', source: j.source || u, fetchedAt: j.fetchedAt || new Date().toISOString(), origin: 'auto' };
+      errs.push(`${u}: ${(j && (j.error || j.msg)) || '解析失敗'}`);
+    } catch (e) { errs.push(`${u}: ${e.message}`); }
+  }
+  throw new Error(errs.join('；') || 'AAII 取得失敗');
+}
+async function refreshAAII(manual) {
+  const src = $('aaiiSrc');
+  if (src) src.textContent = manual ? '' : '更新中…';
+  try {
+    const d = await fetchAAII();
+    S.aaii = d; saveAaiiCache(d); renderAAII();
+    if (src) src.textContent = `來源：${shortHost(d.source)}${d.asof ? ' · ' + d.asof : ''}`;
+    log(`AAII 情緒更新：多 ${d.bullish}% 中 ${d.neutral}% 空 ${d.bearish}%（${d.source}）`);
+  } catch (e) {
+    if (src) src.textContent = '自動取得失敗，請手動輸入本週數字（AAII 官網每週四公布）';
+    log('AAII 取得失敗：' + e.message, 'WARN');
+    if (!S.aaii) renderAAII();
+  }
+}
+function applyManualAAII() {
+  const b = Number($('aaiiInBull').value), n = Number($('aaiiInNeu').value), be = Number($('aaiiInBear').value);
+  if (!Number.isFinite(b) || !Number.isFinite(be)) { $('aaiiSrc').textContent = '請至少輸入看多、看空 %'; return; }
+  const d = { bullish: b, neutral: Number.isFinite(n) ? n : Math.round((100 - b - be) * 10) / 10, bearish: be, asof: taipeiNow().date, source: '手動輸入', fetchedAt: new Date().toISOString(), origin: 'manual' };
+  S.aaii = d; saveAaiiCache(d); renderAAII();
+  $('aaiiSrc').textContent = '已套用手動數字';
+  log(`AAII 手動輸入：多 ${b}% 中 ${d.neutral}% 空 ${be}%`);
+}
+function shortHost(u) { try { return new URL(u).host || u; } catch (_) { return u || ''; } }
+function renderAAII() {
+  const d = S.aaii, itp = d ? SM.interpretAAII(d) : null;
+  const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  const bar = (id, v) => { const el = $(id); if (el) el.style.width = Math.max(0, Math.min(100, v || 0)) + '%'; };
+  if (!itp) {
+    set('aaiiBull', '—'); set('aaiiNeu', '—'); set('aaiiBear', '—'); set('aaiiSpread', '—');
+    set('aaiiLabel', '等待資料'); const v = $('aaiiVerdict'); if (v) v.className = 'verdict neutral';
+    return;
+  }
+  set('aaiiBull', itp.bullish + '%'); set('aaiiNeu', itp.neutral + '%'); set('aaiiBear', itp.bearish + '%');
+  bar('aaiiBullBar', itp.bullish); bar('aaiiNeuBar', itp.neutral); bar('aaiiBearBar', itp.bearish);
+  set('aaiiSpread', (itp.spread >= 0 ? '+' : '') + itp.spread);
+  set('aaiiLabel', itp.label);
+  const v = $('aaiiVerdict'); if (v) v.className = 'verdict ' + (itp.tone === 'bull' ? 'bull' : itp.tone === 'bear' ? 'bear' : 'neutral');
+  set('aaiiNote', itp.note + `　（長期均值 多${itp.avg.bullish}/中${itp.avg.neutral}/空${itp.avg.bearish}）`);
+  const meta = $('aaiiMeta');
+  if (meta && d) meta.textContent = `美國散戶調查 · 反向指標 · ${d.origin === 'manual' ? '手動' : '自動'}${d.asof ? ' · ' + d.asof : ''}`;
 }
 function taipeiDate() { return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei' })); }
 function tickCodeFor(pr) {
@@ -1110,6 +1206,11 @@ async function runChecks() {
       const brows = bj.data || []; const bb = SM.parseBreadthRows(brows);
       add({ name: '漲跌家數 TaiwanVariousIndicators5Seconds', ok: brows.length > 0 && bb.last != null, warn: brows.length > 0 && bb.last == null, msg: brows.length ? (bb.last != null ? `淨漲跌家數 ${bb.last.net}（上漲 ${bb.last.up ?? '?'} / 下跌 ${bb.last.down ?? '?'}）` : `有 ${brows.length} 列但欄位無法辨識，首列 ${JSON.stringify(brows[0]).slice(0, 220)}`) : '回傳 0 列（盤前/收盤或無權限）' });
     } catch (e) { add({ name: '漲跌家數 TaiwanVariousIndicators5Seconds', ok: false, warn: true, msg: e.message }); }
+    try {
+      const j = await fetchJson(isCloud() ? '/.netlify/functions/aaii?debug=1' : 'https://www.aaii.com/sentimentsurvey', {}, 15000);
+      if (j && j.ok) add({ name: 'AAII 散戶情緒（反向指標，週更）', ok: true, msg: `多 ${j.bullish}% / 中 ${j.neutral}% / 空 ${j.bearish}%（多空差 ${(j.bullish - j.bearish).toFixed(1)}）來源 ${shortHost(j.source || '')}` });
+      else add({ name: 'AAII 散戶情緒（反向指標，週更）', ok: false, warn: true, msg: `${(j && j.error) || '無法自動解析'}${j && j.rawSnippet ? '｜原始片段：' + String(j.rawSnippet).replace(/\s+/g, ' ').slice(0, 160) : ''}（可在「即時」頁改用手動輸入）` });
+    } catch (e) { add({ name: 'AAII 散戶情緒（反向指標，週更）', ok: false, warn: true, msg: e.message + '（可在「即時」頁改用手動輸入）' }); }
     try { const j = await finmind('data', { dataset: 'TaiwanStockTradingDate', start_date: '2026-01-01', end_date: '2026-01-10' }, 15000); add({ name: 'FinMind Token 有效（免費資料集）', ok: (j.data || []).length > 0, msg: `${(j.data || []).length} 筆` }); }
     catch (e) { add({ name: 'FinMind Token 有效（免費資料集）', ok: false, msg: e.message }); }
     try { const j = await finmind('taiwan_futures_snapshot', { data_id: 'TXF' }, 15000); const row = pickNear(j.data, 'TXF'); add({ name: '即時快照權限 taiwan_futures_snapshot（付費）', ok: !!row, msg: row ? `${row.futures_id} ${row.date} 價 ${row.close} 量 ${row.total_volume} TickType=${row.TickType ?? row.tick_type ?? '無'}` : '回傳無資料（非交易時段可能為空）', warn: !row }); if (row) badge('bData', 'FinMind 快照 ✓', 'ok'); }
@@ -1163,6 +1264,8 @@ $('btnExport').addEventListener('click', () => {
 $('btnTestTg').addEventListener('click', async () => { readForm(); saveSettings(); try { await sendTelegram(`🧪 台指期聰明錢看板測試訊息 ${new Date().toLocaleString('zh-TW')}`); badge('bTg', 'Telegram ✓', 'ok'); alert('Telegram 測試訊息已送出'); } catch (e) { badge('bTg', 'Telegram ✗', 'err'); alert('Telegram 失敗：' + e.message); } });
 $('btnCtx').addEventListener('click', () => { readForm(); saveSettings(); loadContext(); });
 $('btnDiag').addEventListener('click', () => runTickDiag(true));
+$('btnAaii').addEventListener('click', () => refreshAAII(false));
+$('btnAaiiSave').addEventListener('click', applyManualAAII);
 async function runTickDiag(fromButton) {
   if (S._diagRunning) return; S._diagRunning = true;
   if (fromButton) { readForm(); saveSettings(); }
@@ -1196,6 +1299,11 @@ setInterval(() => {
 }, 1000);
 badge('bMode', '待命', ''); badge('bData', settings.token ? 'FinMind Token 已設定' : 'FinMind 未設定', settings.token ? 'info' : 'warn'); badge('bProxy', isCloud() ? '雲端函式' : '本機', ''); badge('bTg', (settings.tgBot && settings.tgChat) ? 'Telegram 已設定' : 'Telegram 未設定', (settings.tgBot && settings.tgChat) ? 'info' : '');
 if (restoreState()) { render(); }
+S.aaii = loadAaiiCache(); renderAAII();
+{ // AAII 情緒：載入即抓一次；快取超過 12 小時才自動更新（週更資料不需頻繁抓）
+  const stale = !S.aaii || !S.aaii.fetchedAt || (Date.now() - Date.parse(S.aaii.fetchedAt) > 12 * 3600e3);
+  if (stale && S.aaii?.origin !== 'manual') refreshAAII(false);
+}
 if (!settings.token) notice('👋 首次使用：到「設定」填入 FinMind <b>付費</b> Token 與 Telegram Bot，再回「即時」按開始；或先按「示範資料」體驗。「檢核」分頁可一鍵驗證權限與引擎。');
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) { navigator.serviceWorker.register('sw.js').catch(() => {}); }
 })();

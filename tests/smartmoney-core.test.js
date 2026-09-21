@@ -95,6 +95,19 @@ ok('到期排序鍵遞增', SM.contractExpiryKey('TXFI6') < SM.contractExpiryKey
   ok('漲跌家數過濾：關閉時不影響', SM.backtestBars(barsB, {}, blockLong).trades.length === SM.backtestDay(trB, {}).trades.length);
 }
 
+// AAII 散戶情緒（反向指標）
+{
+  const hi = SM.interpretAAII({ bullish: 55, neutral: 20, bearish: 25 });
+  ok('AAII：過度樂觀 → 反向偏空', hi.tone === 'bear' && hi.level === 'extreme' && hi.spread === 30 && hi.contrarian < 0);
+  const lo = SM.interpretAAII({ bullish: 20, neutral: 25, bearish: 55 });
+  ok('AAII：過度悲觀 → 反向偏多', lo.tone === 'bull' && lo.level === 'extreme' && lo.spread === -35 && lo.contrarian > 0);
+  const mid = SM.interpretAAII({ bullish: 38, neutral: 31, bearish: 31 });
+  ok('AAII：接近均值 → 中性', mid.tone === 'neutral' && mid.level === 'normal');
+  const noNeu = SM.interpretAAII({ bullish: 40, bearish: 30 });
+  ok('AAII：缺中立自動補算 = 30', noNeu.neutral === 30 && noNeu.spread === 10);
+  ok('AAII：缺欄位回傳 null', SM.interpretAAII({ bullish: 40 }) === null && SM.interpretAAII(null) === null);
+}
+
 // 合成資料 → 回測
 const syn = SM.syntheticDay(7);
 const trades = SM.rowsToTrades(syn.rows);

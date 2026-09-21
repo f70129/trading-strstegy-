@@ -793,8 +793,41 @@
     return { rows, regime: regimes };
   }
 
+  // ---------- AAII 散戶情緒（反向指標）----------
+  /** AAII 歷史平均（長期）：多 37.5% / 中 31.5% / 空 31%，多空差約 +6.5% */
+  const AAII_AVG = { bullish: 37.5, neutral: 31.5, bearish: 31.0, spread: 6.5 };
+  /**
+   * 解讀 AAII 情緒為「反向」訊號。輸入 { bullish, neutral, bearish }（%），
+   * 回傳 { spread, level, tone, contrarian, label, note }。
+   * tone: 'bull'（反向偏多）/ 'bear'（反向偏空）/ 'neutral'；contrarian: -100..100（>0 反向偏多）。
+   * 週更美國散戶調查，僅供情緒參考，不介入台指盤中進出場。
+   */
+  function interpretAAII(s) {
+    if (!s || !Number.isFinite(Number(s.bullish)) || !Number.isFinite(Number(s.bearish))) return null;
+    const bullish = Number(s.bullish), bearish = Number(s.bearish);
+    const neutral = Number.isFinite(Number(s.neutral)) ? Number(s.neutral) : round(100 - bullish - bearish, 1);
+    const spread = round(bullish - bearish, 1);
+    // 反向分數：散戶越看空 → 反向越偏多（正）；以與長期均值的偏離估算，clamp 到 ±100
+    const contrarian = Math.max(-100, Math.min(100, round(-(spread - AAII_AVG.spread) * 2.2, 1)));
+    let level = 'normal', tone = 'neutral', label = '中性', note = '散戶情緒接近長期均值，反向訊號不明顯。';
+    if (bullish >= 50 || spread >= 20) {
+      level = 'extreme'; tone = 'bear'; label = '散戶過度樂觀 → 反向偏空';
+      note = `看多 ${bullish}%、多空差 +${spread}（偏高）。散戶過熱常為短期見頂警訊，追多宜保守。`;
+    } else if (bearish >= 50 || spread <= -20) {
+      level = 'extreme'; tone = 'bull'; label = '散戶過度悲觀 → 反向偏多';
+      note = `看空 ${bearish}%、多空差 ${spread}（偏低）。散戶恐慌常為潛在反彈區，追空宜保守。`;
+    } else if (spread >= 12) {
+      level = 'elevated'; tone = 'bear'; label = '散戶偏樂觀';
+      note = `多空差 +${spread} 高於均值(+${AAII_AVG.spread})，情緒略熱。`;
+    } else if (spread <= 0) {
+      level = 'elevated'; tone = 'bull'; label = '散戶偏悲觀';
+      note = `多空差 ${spread} 低於均值(+${AAII_AVG.spread})，情緒偏冷。`;
+    }
+    return { bullish, neutral, bearish, spread, level, tone, contrarian, label, note, avg: AAII_AVG };
+  }
+
   return {
-    VERSION, CONTRACT_WEIGHT, PRODUCT_ALIAS, POINT_VALUE_NTD, DEFAULT_PARAMS,
+    VERSION, CONTRACT_WEIGHT, PRODUCT_ALIAS, POINT_VALUE_NTD, DEFAULT_PARAMS, AAII_AVG, interpretAAII,
     mergeParams, hhmmToMin, minToHHMM, normalizeProduct, contractWeight, parseTickTime,
     selectNearContract, tickSide, classify, rowsToTrades, FlowBook, buildBars,
     computeSeries, sentiment, PaperTrader, backtestDay, backtestBars, gridSearch,
