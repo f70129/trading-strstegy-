@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.1/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" onerror="(function(){var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.1/echarts.min.js';document.head.appendChild(s);})()"></script>
 <style>
 /* ===== Tokens: light (bare :root) ===== */
 :root{
@@ -530,8 +530,8 @@ function updateHeader(id,name){
 /* ---------- render orchestrator ---------- */
 function renderAll(){
   if(!PRICE.length)return;
-  renderMain();renderMACD();renderKD();renderRSI();renderInst();renderMargin();
-  renderScore();renderLevels();renderSignals();
+  [renderMain,renderMACD,renderKD,renderRSI,renderInst,renderMargin,renderScore,renderLevels,renderSignals]
+    .forEach(fn=>{try{fn();}catch(e){console.error(fn.name,e);}});
   requestAnimationFrame(()=>Object.values(charts).forEach(c=>c&&c.resize()));
 }
 function mk(id){const el=document.getElementById(id);if(!el)return null;if(charts[id])charts[id].dispose();charts[id]=echarts.init(el);return charts[id];}
@@ -767,7 +767,17 @@ function saveToken(){try{localStorage.setItem('fm_token',document.getElementById
   document.getElementById('stockInput').addEventListener('keypress',e=>{if(e.key==='Enter')loadAll();});
   addEventListener('resize',()=>Object.values(charts).forEach(c=>c&&c.resize()));
   matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>{if(!document.documentElement.getAttribute('data-theme')){paintThemeBtn();renderAll();}});
-  loadAll();
+  // 等待圖表函式庫就緒（雙 CDN 備援）後再啟動；逾時則顯示明確錯誤，不留白畫面
+  let waited=0;
+  (function ready(){
+    if(window.echarts){loadAll();return;}
+    if(waited>=9000){
+      document.getElementById('loading').classList.remove('on');
+      document.getElementById('disc').innerHTML='⚠ 圖表函式庫 (ECharts) 無法從 CDN 載入。請確認網路可連線，或重新整理頁面。';
+      return;
+    }
+    waited+=150;setTimeout(ready,150);
+  })();
 })();
 </script>
 </body>
