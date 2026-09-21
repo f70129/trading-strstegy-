@@ -217,7 +217,7 @@ footer b{color:var(--ink-2)}
     <span class="status-pill"><span class="dot" id="statusDot"></span><span id="statusTxt">待載入</span></span>
   </div>
   <div class="stats">
-    <div class="stat"><span class="lb">收盤 <span id="dateBadge" class="num" style="color:var(--muted)">—</span></span><span class="vl big num" id="s-price">—</span></div>
+    <div class="stat"><span class="lb"><span id="priceLbl">收盤</span> <span id="dateBadge" class="num" style="color:var(--muted)">—</span></span><span class="vl big num" id="s-price">—</span></div>
     <div class="stat"><span class="lb">漲跌</span><span class="vl num" id="s-chg">—</span></div>
     <div class="stat"><span class="lb">幅度</span><span class="vl num" id="s-pct">—</span></div>
     <div class="stat"><span class="lb">量(張)</span><span class="vl num" id="s-vol" style="color:var(--ink-2)">—</span></div>
@@ -333,6 +333,7 @@ footer b{color:var(--ink-2)}
 const API='https://api.finmindtrade.com/api/v4/data';
 const charts={};
 let PRICE=[], INST=[], MARGIN=[], IND=null;
+let pollTimer=null, currentName='', currentId='';
 
 /* ---------- theme ---------- */
 function currentTheme(){
@@ -470,6 +471,58 @@ function normMargin(raw){
   }));
 }
 
+/* ---------- 盤中即時報價（證交所 MIS，經同網域 /api/twse 代理；僅部署站可用）---------- */
+function num(x){const v=parseFloat(x);return isFinite(v)?v:null;}
+function misDate(d){return (d&&d.length>=8)?`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`:null;}
+function parseMis(m){
+  const z=num(m.z),o=num(m.o);
+  if(z==null&&o==null)return null;      // 尚未成交／非交易時段：無盤中價
+  const price=z??o;
+  return {price,open:o??price,high:num(m.h)??price,low:num(m.l)??price,
+    prevClose:num(m.y),vol:num(m.v),date:misDate(m.d),time:m.t||''};
+}
+async function fetchRealtime(id){
+  for(const ex of ['tse','otc']){
+    try{
+      const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),6000);
+      const r=await fetch(`/api/twse?id=${encodeURIComponent(id)}&ex=${ex}`,{signal:ctl.signal});
+      clearTimeout(to);
+      if(!r.ok)continue;
+      const j=await r.json();
+      const m=j.msgArray&&j.msgArray[0];
+      const rt=m?parseMis(m):null;
+      if(rt)return rt;
+    }catch(e){/* 非部署網域（file://、artifact 沙盒）取不到，靜默略過 */}
+  }
+  return null;
+}
+function mergeRealtime(rt){
+  if(!rt||rt.price==null)return false;
+  const last=PRICE.at(-1);
+  const d=rt.date||last.date;
+  const bar={date:d,open:rt.open??last.open,close:rt.price,
+    max:Math.max(rt.high??rt.price,rt.price),min:Math.min(rt.low??rt.price,rt.price),
+    vol:rt.vol!=null?rt.vol:last.vol};
+  if(d>last.date)PRICE.push(bar); else Object.assign(last,bar);
+  IND=computeIndicators();
+  return true;
+}
+function inMarketHours(){
+  try{
+    const d=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Taipei'}));
+    const hm=d.getHours()*60+d.getMinutes();
+    return d.getDay()>=1&&d.getDay()<=5&&hm>=540&&hm<=815; // 週一~五 09:00–13:35
+  }catch(e){return true;}
+}
+function scheduleRealtime(id){
+  clearInterval(pollTimer);
+  pollTimer=setInterval(async()=>{
+    if(!inMarketHours())return;
+    const rt=await fetchRealtime(id);
+    if(rt&&mergeRealtime(rt)){setStatus('live-rt',rt.time);updateHeader(id,currentName);renderAll();}
+  },20000);
+}
+
 /* ---------- main load ---------- */
 async function loadAll(){
   const id=(document.getElementById('stockInput').value||'2360').trim();
@@ -495,20 +548,38 @@ async function loadAll(){
     if(!name)name=(id==='2360'?'致茂':id)+' (示範)';
   }
   IND=computeIndicators();
-  setStatus(live);
+  currentId=id; currentName=name;
+  setStatus(live?'live-daily':'demo');
   updateHeader(id,name);
   renderAll();
   document.getElementById('rangeTxt').textContent=`${PRICE[0].date} → ${PRICE.at(-1).date} · ${PRICE.length} 交易日`;
-  document.getElementById('disc').textContent=live
-    ? '資料來源 FinMind（即時）。技術指標 MA/MACD/KD/RSI/布林/ATR、支撐壓力與綜合評分均為本頁依原始日K與法人資料即時運算之結果。'
-    : '⚠ 目前顯示示範資料（FinMind API 於此環境被封鎖或達到速率上限）。將此檔於本機瀏覽器開啟即可取得即時真實數據。所有指標邏輯與即時模式完全相同。';
   document.getElementById('loading').classList.remove('on');
+
+  // 盤中即時層：僅在部署於含 /api/twse 代理的網域時可用
+  let rtOK=false;
+  if(live){
+    const rt=await fetchRealtime(id);
+    if(rt&&mergeRealtime(rt)){
+      rtOK=true; setStatus('live-rt',rt.time); updateHeader(id,name); renderAll();
+      document.getElementById('rangeTxt').textContent=`${PRICE[0].date} → ${PRICE.at(-1).date} · 含盤中`;
+    }
+  }
+  document.getElementById('disc').innerHTML = !live
+    ? '⚠ 目前顯示示範資料（FinMind API 於此環境被封鎖或達速率上限）。將本頁部署或於本機瀏覽器開啟即可取得真實資料；所有指標邏輯與即時模式完全相同。'
+    : rtOK
+      ? '盤中現價來自證交所 MIS 即時行情（同網域 /api/twse 代理），交易時段約每 20 秒更新，並以最新即時價重算所有技術指標；日K、法人與融資券歷史來自 FinMind。'
+      : 'FinMind 提供日K（收盤）資料——盤中即時報價需將本頁部署於含 /api/twse 代理的網域（例如 trading-strstegy.pages.dev）方能顯示；目前為最新收盤。';
+  scheduleRealtime(id);
 }
-function setStatus(live){
-  const dot=document.getElementById('statusDot'),tx=document.getElementById('statusTxt');
-  dot.className='dot '+(live?'live':'demo');
-  tx.textContent=live?'FINMIND LIVE':'DEMO DATA';
-  tx.style.color=live?'var(--down)':'var(--warn)';
+function setStatus(mode,extra){
+  const dot=document.getElementById('statusDot'),tx=document.getElementById('statusTxt'),lbl=document.getElementById('priceLbl');
+  const map={
+    'live-rt':['live','TWSE 即時'+(extra?' '+extra:''),'var(--down)','現價'],
+    'live-daily':['live','FINMIND 日K (收盤)','var(--down)','收盤'],
+    'demo':['demo','DEMO DATA','var(--warn)','收盤']
+  };
+  const [d,t,c,pl]=map[mode]||map['demo'];
+  dot.className='dot '+d; tx.textContent=t; tx.style.color=c; if(lbl)lbl.textContent=pl;
 }
 function fmtInt(n){return Math.round(n).toLocaleString('en-US');}
 function updateHeader(id,name){
