@@ -627,14 +627,14 @@ function renderMain(){
     animation:false,
     tooltip:{...baseTip(p),axisPointer:{type:'cross'}},
     axisPointer:{link:[{xAxisIndex:'all'}]},
-    grid:[{left:52,right:16,top:14,height:'62%'},{left:52,right:16,top:'72%',height:'20%'}],
+    grid:[{left:14,right:62,top:14,height:'62%'},{left:14,right:62,top:'72%',height:'20%'}],
     xAxis:[
       {type:'category',data:dates(),boundaryGap:true,axisLine:{lineStyle:{color:p.border}},axisLabel:{color:p.muted,fontSize:10},axisTick:{show:false}},
       {type:'category',gridIndex:1,data:dates(),axisLabel:{show:false},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}}
     ],
     yAxis:[
-      {scale:true,position:'right',splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:10},axisLine:{show:false},axisTick:{show:false}},
-      {gridIndex:1,scale:true,splitNumber:2,axisLabel:{show:false},splitLine:{show:false},axisLine:{show:false},axisTick:{show:false}}
+      {scale:true,position:'right',splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:10,formatter:v=>v>=500?String(Math.round(v)):v.toFixed(2)},axisLine:{show:false},axisTick:{show:false}},
+      {gridIndex:1,scale:true,splitNumber:2,position:'right',axisLabel:{show:false},splitLine:{show:false},axisLine:{show:false},axisTick:{show:false}}
     ],
     series:[
       {name:'K',type:'candlestick',data:kdata,barMaxWidth:9,
