@@ -156,6 +156,30 @@ main{padding:14px;max-width:1680px;margin:0 auto}
 .sig.n .ic{background:var(--accent-soft);color:var(--accent)}
 .empty{color:var(--muted);font-size:12px;text-align:center;padding:20px}
 
+/* advice */
+.advice-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;margin-bottom:14px}
+.advice-verdict{font-size:24px;font-weight:700;padding:2px 14px;border-radius:10px;line-height:1.3}
+.advice-stance{font-size:14px;color:var(--ink-2);line-height:1.55;flex:1;min-width:240px}
+.advice-grid{display:grid;grid-template-columns:1fr 1fr 1.1fr;gap:18px}
+@media(max-width:820px){.advice-grid{grid-template-columns:1fr}}
+.advice-col{min-width:0}
+.advice-lab{font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--muted);margin-bottom:9px}
+.advice-lab.up{color:var(--up)}.advice-lab.down{color:var(--down)}
+.advice-tags{display:flex;flex-wrap:wrap;gap:6px}
+.advice-tags .tg{font-size:12px;padding:4px 9px;border-radius:7px;background:var(--panel-2);border:1px solid var(--border)}
+.advice-tags .tg.up{color:var(--up);border-color:color-mix(in srgb,var(--up) 30%,transparent);background:var(--up-soft)}
+.advice-tags .tg.down{color:var(--down);border-color:color-mix(in srgb,var(--down) 30%,transparent);background:var(--down-soft)}
+.advice-tags .none{color:var(--muted);font-size:12px}
+.advice-levels{display:flex;flex-direction:column;gap:2px}
+.advice-levels .lvrow{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--border)}
+.advice-levels .lvrow:last-child{border-bottom:none}
+.advice-levels .lvrow .k{color:var(--ink-2)}
+.advice-levels .lvrow .v{font-family:var(--font-mono);font-weight:600;text-align:right}
+.advice-note{margin-top:14px;font-size:12.5px;color:var(--ink-2);line-height:1.65;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:11px 13px}
+.advice-note b{color:var(--ink)}
+.advice-disc{margin-top:10px;font-size:11px;color:var(--muted);line-height:1.55}
+.advice-disc b{color:var(--warn)}
+
 /* modal */
 .overlay{position:fixed;inset:0;background:rgba(3,7,15,.62);backdrop-filter:blur(3px);z-index:60;display:none;align-items:center;justify-content:center;padding:16px}
 .overlay.on{display:flex}
@@ -311,6 +335,24 @@ footer b{color:var(--ink-2)}
       <div class="body"><div class="signals" id="signals"></div></div>
     </section>
 
+    <!-- 綜合研判與操作建議 -->
+    <section class="card col-12" id="adviceCard">
+      <div class="hd"><span class="t">綜合研判與操作建議</span><span class="s">彙整技術評分 · 訊號 · 籌碼 · 大盤環境</span><div class="meta" id="adviceMeta"></div></div>
+      <div class="body">
+        <div class="advice-head">
+          <div class="advice-verdict" id="adviceVerdict">—</div>
+          <div class="advice-stance" id="adviceStance">分析中…</div>
+        </div>
+        <div class="advice-grid">
+          <div class="advice-col"><div class="advice-lab up">利多因子</div><div class="advice-tags" id="advicePos"></div></div>
+          <div class="advice-col"><div class="advice-lab down">風險因子</div><div class="advice-tags" id="adviceNeg"></div></div>
+          <div class="advice-col"><div class="advice-lab">關鍵操作價位</div><div class="advice-levels" id="adviceLevels"></div></div>
+        </div>
+        <div class="advice-note" id="adviceNote"></div>
+        <div class="advice-disc">⚠ 本研判由程式依即時數據自動歸納技術與籌碼面而成，<b>非投資建議、不保證獲利，亦不構成任何買賣要約</b>。所有投資決策與風險請自行評估承擔。</div>
+      </div>
+    </section>
+
   </div>
 
   <div class="disc" id="disc"></div>
@@ -327,7 +369,7 @@ footer b{color:var(--ink-2)}
 const API='https://api.finmindtrade.com/api/v4/data';
 const charts={};
 let PRICE=[], INST=[], MARGIN=[], IND=null;
-let pollTimer=null, currentName='', currentId='';
+let pollTimer=null, currentName='', currentId='', SCORE=null;
 
 /* ---------- theme ---------- */
 function currentTheme(){
@@ -604,7 +646,7 @@ function updateHeader(id,name){
 /* ---------- render orchestrator ---------- */
 function renderAll(){
   if(!PRICE.length)return;
-  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro]
+  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,renderAdvice]
     .forEach(fn=>{try{fn();}catch(e){console.error(fn.name,e);}});
   requestAnimationFrame(()=>Object.values(charts).forEach(c=>c&&c.resize()));
 }
@@ -714,6 +756,7 @@ async function loadMacro(){
   metaChip('macroMeta', miss.length?'warn':'up', miss.length? `${3-miss.length}/3 · 缺 ${miss.join('、')}` : '3/3 即時載入');
   MACRO_LOADING=false;
   drawMacro();
+  try{renderAdvice();}catch(e){}
 }
 function drawMacro(){
   const el=document.getElementById('chart-macro'); if(!el)return;
@@ -829,6 +872,7 @@ function renderScore(){
   let lbl,col;
   if(total>=75){lbl='強勢多方';col=p.up;} else if(total>=58){lbl='偏多';col=p.up;}
   else if(total>=43){lbl='中性';col=p.warn;} else if(total>=28){lbl='偏空';col=p.down;} else{lbl='弱勢空方';col=p.down;}
+  SCORE={total,label:lbl,col};
   const num=document.getElementById('scoreNum');num.innerHTML=total+'<small>/100</small>';num.style.color=col;
   const lb=document.getElementById('scoreLbl');lb.textContent=lbl;lb.style.color=col;lb.style.background=`color-mix(in srgb,${col} 15%,transparent)`;
   const bar=document.getElementById('scoreBar');bar.style.width=total+'%';bar.style.background=`linear-gradient(90deg,${col},color-mix(in srgb,${col} 55%,#fff))`;
@@ -889,6 +933,73 @@ function renderSignals(){
   if(!out.length){wrap.innerHTML='<div class="empty">最新交易日無明顯技術訊號 · 區間整理</div>';return;}
   const glyph={g:'▲',b:'▼',w:'!',n:'●'};
   wrap.innerHTML=out.map(s=>`<div class="sig ${s.t}"><span class="ic">${glyph[s.t]}</span><span class="tx"><b>${s.tx}</b><span>${s.sub}</span></span></div>`).join('');
+}
+
+/* ---------- 綜合研判與操作建議（彙整所有面板數據）---------- */
+function lastNN(a){for(let i=a.length-1;i>=0;i--)if(a[i]!=null)return a[i];return null;}
+function meanLastNN(a,n){const v=a.filter(x=>x!=null).slice(-n);return v.length?v.reduce((s,x)=>s+x,0)/v.length:null;}
+function renderAdvice(){
+  if(!PRICE.length||!IND||!SCORE)return;
+  const i=PRICE.length-1,L=PRICE.at(-1),p=pal();
+  const close=L.close,ma20=IND.ma20[i],ma60=IND.ma60[i],m5=IND.ma5[i],m10=IND.ma10[i],atr=IND.atr14[i]||0;
+  const win=PRICE.slice(-60),hi60=Math.max(...win.map(d=>d.max)),lo60=Math.min(...win.map(d=>d.min));
+  const bUp=IND.boll.up[i],bLo=IND.boll.lo[i];
+  const pos=[],neg=[];
+  // 技術面
+  if(m5>m10&&m10>ma20&&ma20>ma60)pos.push('均線多頭排列'); else if(m5<m10&&m10<ma20)neg.push('均線空頭排列');
+  if(close>ma20)pos.push('站穩月線'); else neg.push('位於月線之下');
+  const osc=IND.macd.osc[i],oscp=IND.macd.osc[i-1]||0;
+  if(osc>0&&osc>=oscp)pos.push('MACD紅棒續增'); if(osc<0&&osc<=oscp)neg.push('MACD綠棒擴大');
+  const r=IND.rsi14[i];
+  if(r>70)neg.push('RSI超買('+r.toFixed(0)+')'); else if(r<30)pos.push('RSI超賣('+r.toFixed(0)+')'); else if(r>=50)pos.push('RSI強勢區');
+  const vr=L.vol/(IND.volma20[i]||L.vol);
+  if(vr>1.5&&close>=L.open)pos.push('量增紅K'); if(vr>1.5&&close<L.open)neg.push('爆量黑K');
+  if(bUp&&close>bUp)neg.push('突破布林上軌(過熱)'); if(bLo&&close<bLo)pos.push('觸及布林下軌(超跌)');
+  // 籌碼面
+  if(INST.length){const f5=sum(INST.slice(-5).map(x=>x.Foreign)),t5=sum(INST.slice(-5).map(x=>x.Trust));
+    if(f5>0)pos.push('外資5日買超'); if(f5<0)neg.push('外資5日賣超'); if(t5>0)pos.push('投信站買方');}
+  if(MARGIN.length>=6){const base=MARGIN.at(-6).margin||1,mc=MARGIN.at(-1).margin-MARGIN.at(-6).margin;
+    if(mc/base>0.03)neg.push('融資大增(散戶追高)'); else if(mc<0)pos.push('融資減少(浮額清洗)');}
+  // 大盤環境
+  let macroNote='大盤環境資料載入中…';
+  if(MACRO){
+    const vix=lastNN(MACRO.sV),vixAvg=meanLastNN(MACRO.sV,20);
+    const ta=lastNN(MACRO.sT),taAvg=meanLastNN(MACRO.sT,20);
+    const xs=MACRO.sX.filter(x=>x!=null),tw=xs.at(-1),twOld=xs.length>=20?xs.at(-20):xs[0];
+    if(vix!=null){ if(vix>=25)neg.push('VIXTWN偏高('+vix.toFixed(1)+')'); else if(vix<=15)pos.push('VIXTWN偏低('+vix.toFixed(1)+')'); else if(vixAvg&&vix>vixAvg*1.1)neg.push('VIXTWN走升'); }
+    if(ta!=null&&taAvg!=null){ if(ta>taAvg)pos.push('大盤站上均線'); else neg.push('大盤跌破均線'); }
+    if(tw!=null&&twOld!=null){ if(tw>twOld*1.005)neg.push('新台幣走貶(資金流出)'); else if(tw<twOld*0.995)pos.push('新台幣走升(資金流入)'); }
+    macroNote=`大盤環境：VIXTWN ${vix!=null?vix.toFixed(1):'—'}、加權指數 ${ta!=null?Math.round(ta).toLocaleString('en-US'):'—'}、台美匯率 ${tw!=null?tw.toFixed(2):'—'}。`;
+  }
+  // 操作立場（依綜合評分，並以大盤風險修正）
+  const t=SCORE.total; let verdict,vcol,stance;
+  if(t>=75){verdict='偏多';vcol=p.up;stance='多方架構明確，可順勢偏多操作；拉回不破月線續抱，沿 5/10 日線移動停利。';}
+  else if(t>=58){verdict='偏多';vcol=p.up;stance='偏多格局，建議逢回測支撐(月線附近)分批布局，追高留意過熱風險。';}
+  else if(t>=43){verdict='中性';vcol=p.warn;stance='多空未明、區間震盪，宜區間高出低進、嚴設停損，不宜重倉單邊。';}
+  else if(t>=28){verdict='偏空';vcol=p.down;stance='偏空格局，反彈視為減碼機會，不宜逆勢接刀，待止跌訊號再評估。';}
+  else{verdict='空方';vcol=p.down;stance='空方架構，建議觀望或嚴守停損，等待價穩量縮的落底訊號。';}
+  const vixNow=MACRO?lastNN(MACRO.sV):null;
+  if(vixNow!=null&&vixNow>=25&&t>=58)stance+=' 惟 VIXTWN 偏高、系統性風險升溫，建議降低部位、分批操作。';
+  // 波動與部位
+  const atrPct=close?atr/close*100:0;
+  const posNote=`日波動 ATR14 ≈ ${atr.toFixed(2)}（${atrPct.toFixed(1)}%）；`+(atrPct>4?'波動偏大，部位宜縮小、停損放寬至波動之外，避免被洗。':'波動中性，可依常規部位與停損控管。');
+  // 關鍵價位
+  const levels=[
+    {k:'壓力（60日高 / 布林上軌）',v:`${hi60.toFixed(2)} / ${bUp?bUp.toFixed(2):'—'}`},
+    {k:'月線 MA20',v:ma20?ma20.toFixed(2):'—'},
+    {k:'支撐（60日低 / 布林下軌）',v:`${lo60.toFixed(2)} / ${bLo?bLo.toFixed(2):'—'}`},
+    {k:'停損參考（現價 − 2×ATR）',v:(close-2*atr).toFixed(2)}
+  ];
+  const uniq=a=>[...new Set(a)];
+  const tags=(a,cls)=>a.length?uniq(a).map(x=>`<span class="tg ${cls}">${x}</span>`).join(''):'<span class="none">—</span>';
+  const V=document.getElementById('adviceVerdict');if(!V)return;
+  V.textContent=verdict;V.style.color=vcol;V.style.background=`color-mix(in srgb,${vcol} 14%,transparent)`;
+  document.getElementById('adviceStance').textContent=stance;
+  document.getElementById('advicePos').innerHTML=tags(pos,'up');
+  document.getElementById('adviceNeg').innerHTML=tags(neg,'down');
+  document.getElementById('adviceLevels').innerHTML=levels.map(x=>`<div class="lvrow"><span class="k">${x.k}</span><span class="v">${x.v}</span></div>`).join('');
+  document.getElementById('adviceNote').innerHTML=`${macroNote} ${posNote} 綜合技術評分 <b>${t}</b>/100（${SCORE.label}）；利多 ${uniq(pos).length} 項、風險 ${uniq(neg).length} 項。`;
+  metaChip('adviceMeta',verdict==='偏多'?'up':verdict==='中性'?'warn':'down',`評分 ${t} · ${verdict}`);
 }
 
 /* ---------- settings ---------- */
