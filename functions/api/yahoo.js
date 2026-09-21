@@ -20,7 +20,7 @@ export async function onRequest(context) {
 
   const symbol = searchParams.get('symbol') || '^GSPC';
   const interval = searchParams.get('interval') || '1d';
-  if (!/^[0-9A-Za-z^._-]{1,20}$/.test(symbol)) {
+  if (!/^[0-9A-Za-z^._=-]{1,20}$/.test(symbol)) {
     return json({ error: 'symbol invalid' }, 400, cors);
   }
 
