@@ -511,19 +511,24 @@ function normMargin(raw){
 function num(x){const v=parseFloat(x);return isFinite(v)?v:null;}
 function misDate(d){return (d&&d.length>=8)?`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`:null;}
 function topOf(s){if(!s)return null;return num(String(s).split('_')[0]);}
+// 台股最小跳動單位（依價格分級），用來把估計價校正為合法價
+function tickTW(px){ if(px<10)return 0.01; if(px<50)return 0.05; if(px<100)return 0.1; if(px<500)return 0.5; if(px<1000)return 1; return 5; }
+function snapTick(px){ if(px==null)return null; const t=tickTW(px); return +(Math.round(px/t)*t).toFixed(2); }
 function parseMis(m){
-  const z=num(m.z);                       // 最新成交價
+  const z=num(m.z);                       // 最新成交價（已是合法價）
   const bid=topOf(m.b), ask=topOf(m.a);   // 最佳買/賣（五檔第一檔）
-  const mid=(bid!=null&&ask!=null)?(bid+ask)/2:(bid!=null?bid:ask);
-  // 現價優先序：成交價 z → 最佳買賣中價；兩者皆無 → 視為非即時。
-  // 絕不拿開盤價 o 當現價（會造成現價=開盤的錯誤）
-  const price = z!=null ? z : mid;
+  // 現價優先序：成交價 z → 最佳買賣中價（校正為合法跳動單位）→ 皆無視為非即時。
+  // 絕不拿開盤價 o 當現價；中價 (買+賣)/2 可能落在非法價位（如台積 2492.5），需 snap 到 tick。
+  let price=null, src='';
+  if(z!=null){ price=z; src='成交價'; }
+  else if(bid!=null&&ask!=null){ price=snapTick((bid+ask)/2); src='買賣中價(估)'; }
+  else if(bid!=null||ask!=null){ price=bid!=null?bid:ask; src=bid!=null?'最佳買價':'最佳賣價'; }
   if(price==null) return null;
   const o=num(m.o),h=num(m.h),l=num(m.l);
-  try{console.log('[MIS 即時原始]',{代號:m.c,名稱:m.n,成交z:m.z,最佳買b:m.b,最佳賣a:m.a,開o:m.o,高h:m.h,低l:m.l,昨收y:m.y,累量v:m.v,時間t:m.t,日期d:m.d,'→採用現價':price});}catch(e){}
+  try{console.log('[MIS 即時原始]',{代號:m.c,名稱:m.n,成交z:m.z,最佳買b:m.b,最佳賣a:m.a,開o:m.o,高h:m.h,低l:m.l,昨收y:m.y,累量v:m.v,時間t:m.t,日期d:m.d,'→採用現價':price,來源:src});}catch(e){}
   return {price, open:o, high:(h!=null?Math.max(h,price):price),
     low:(l!=null?Math.min(l,price):price), prevClose:num(m.y),
-    vol:num(m.v), date:misDate(m.d), time:m.t||'', src:z!=null?'成交價':'買賣中價'};
+    vol:num(m.v), date:misDate(m.d), time:m.t||'', src};
 }
 async function fetchRealtime(id){
   for(const ex of ['tse','otc']){
