@@ -507,22 +507,29 @@ function normMargin(raw){
   }));
 }
 
-/* ---------- 盤中即時報價（FinMind 即時快照 taiwan_stock_tick_snapshot）---------- */
+/* ---------- 盤中即時報價（三層來源）----------
+   13:25 前  → FinMind 即時快照（盤中）
+   13:25 後  → TWSE 官方 MIS 最終成交（避免 FinMind 快照卡在 13:24:59 收盤前）
+   盤後日線出來 → loadAll 直接採用 FinMind 日線（最終校正，見下方 dailyHasToday）
+----------------------------------------------- */
 function num(x){const v=parseFloat(x);return isFinite(v)?v:null;}
+function nowTaipei(){try{return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Taipei'}));}catch(e){return new Date();}}
+function taipeiDateStr(){const d=nowTaipei();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+
+// FinMind 即時快照
 function parseSnapshot(d){
-  // 現價直接取自交易所撮合資料，必為合法價（不做任何買賣盤估算）
   const px=num(d.close ?? d.Close ?? d.deal_price ?? d.price);
   if(px==null||px<=0)return null;
   const o=num(d.open ?? d.Open), h=num(d.high ?? d.High), l=num(d.low ?? d.Low);
-  const sh=num(d.TradeVolume ?? d.trade_volume ?? d.volume); // 累積成交股數
-  const chg=num(d.change_price ?? d.changePrice ?? d.change); // 官方漲跌（對參考昨收）
-  const prevClose=(chg!=null)?+(px-chg).toFixed(2):null;      // 官方參考昨收
+  const sh=num(d.TradeVolume ?? d.total_volume ?? d.TotalVolume ?? d.volume ?? d.Volume); // 累積成交股數
+  const chg=num(d.change_price ?? d.Change ?? d.changePrice ?? d.change ?? d.ChangePrice);
+  const prevClose=(chg!=null)?+(px-chg).toFixed(2):null;
   const ds=(d.date||'').slice(0,10), tm=(d.date||'').slice(11,19);
-  try{console.log('[FinMind 即時快照]',{代號:d.stock_id,現價:px,開:o,高:h,低:l,漲跌:chg,昨收:prevClose,累量股:sh,時間:d.date});}catch(e){}
+  try{console.log('[FinMind 快照 raw]',d);}catch(e){}
   return {price:px, open:o, high:(h!=null?Math.max(h,px):px), low:(l!=null?Math.min(l,px):px),
-    prevClose, vol:(sh!=null?Math.round(sh/1000):null), date:ds||null, time:tm||'', src:'FinMind即時'};
+    prevClose, vol:(sh!=null?Math.round(sh/1000):null), date:ds||null, time:tm||'', src:'盤中快照'};
 }
-async function fetchRealtime(id){
+async function fetchSnapshot(id){
   const token=(localStorage.getItem('fm_token')||'').trim();
   let u=`https://api.finmindtrade.com/api/v4/taiwan_stock_tick_snapshot?data_id=${encodeURIComponent(id)}`;
   if(token)u+=`&token=${token}`;
@@ -530,10 +537,33 @@ async function fetchRealtime(id){
     const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),6000);
     const r=await fetch(u,{signal:ctl.signal}); clearTimeout(to);
     if(!r.ok)return null;
-    const j=await r.json();
-    const d=(j.data&&j.data[0])||null;
+    const j=await r.json(); const d=(j.data&&j.data[0])||null;
     return d?parseSnapshot(d):null;
-  }catch(e){return null;/* 沙盒/離線取不到，靜默退回 FinMind 收盤 */}
+  }catch(e){return null;}
+}
+// TWSE 官方 MIS 最終成交（只用成交價 z，收盤後為最終收盤；y=官方昨收）
+async function fetchMis(id){
+  for(const ex of ['tse','otc']){
+    try{
+      const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),6000);
+      const r=await fetch(`/api/twse?id=${encodeURIComponent(id)}&ex=${ex}`,{signal:ctl.signal});clearTimeout(to);
+      if(!r.ok)continue;
+      const j=await r.json(); const m=j.msgArray&&j.msgArray[0]; if(!m)continue;
+      const z=num(m.z); if(z==null)continue; // 無成交價不估算，略過
+      const y=num(m.y),o=num(m.o),h=num(m.h),l=num(m.l),v=num(m.v);
+      const dt=(m.d&&m.d.length>=8)?`${m.d.slice(0,4)}-${m.d.slice(4,6)}-${m.d.slice(6,8)}`:null;
+      try{console.log('[TWSE MIS 最終]',{成交z:z,昨收y:y,開o,高h,低l,量v,時間:m.t,日期:m.d});}catch(e){}
+      return {price:z,open:o,high:(h!=null?Math.max(h,z):z),low:(l!=null?Math.min(l,z):z),
+        prevClose:y,vol:v,date:dt,time:m.t||'',src:'TWSE收盤'};
+    }catch(e){}
+  }
+  return null;
+}
+async function fetchRealtime(id){
+  const d=nowTaipei(), hm=d.getHours()*60+d.getMinutes(), weekday=d.getDay()>=1&&d.getDay()<=5;
+  // 13:25 起（含收盤集合競價）改用 TWSE MIS 最終成交，避免被 13:24:59 的快照卡死
+  if(weekday && hm>=805){ const mis=await fetchMis(id); if(mis)return mis; }
+  return await fetchSnapshot(id);
 }
 function mergeRealtime(rt){
   if(!rt||rt.price==null)return false;
@@ -551,7 +581,7 @@ function inMarketHours(){
   try{
     const d=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Taipei'}));
     const hm=d.getHours()*60+d.getMinutes();
-    return d.getDay()>=1&&d.getDay()<=5&&hm>=540&&hm<=815; // 週一~五 09:00–13:35
+    return d.getDay()>=1&&d.getDay()<=5&&hm>=540&&hm<=845; // 週一~五 09:00–14:05（涵蓋收盤集合競價與最終成交）
   }catch(e){return true;}
 }
 function scheduleRealtime(id){
@@ -596,20 +626,23 @@ async function loadAll(){
   document.getElementById('rangeTxt').textContent=`${PRICE[0].date} → ${PRICE.at(-1).date} · ${PRICE.length} 交易日`;
   document.getElementById('loading').classList.remove('on');
 
-  // 盤中即時層：FinMind 即時快照（現價取自交易所撮合，必為合法價）
-  let rtOK=false;
-  if(live){
+  // 若 FinMind 日線「已含今日」→ 已是當日正式收盤，最權威，不再覆蓋
+  const dailyHasToday = live && PRICE.at(-1).date === taipeiDateStr();
+  let rtOK=false, usedSrc='';
+  if(live && !dailyHasToday){
     const rt=await fetchRealtime(id);
     if(rt&&mergeRealtime(rt)){
-      rtOK=true; setStatus('live-rt',rt.time+(rt.src?' · '+rt.src:'')); updateHeader(id,name); renderAll();
+      rtOK=true; usedSrc=rt.src||''; setStatus('live-rt',rt.time+(rt.src?' · '+rt.src:'')); updateHeader(id,name); renderAll();
       document.getElementById('rangeTxt').textContent=`${PRICE[0].date} → ${PRICE.at(-1).date} · 含盤中`;
     }
   }
   document.getElementById('disc').innerHTML = !live
     ? '⚠ 目前顯示示範資料（FinMind API 於此環境被封鎖或達速率上限）。將本頁部署或於本機瀏覽器開啟即可取得真實資料；所有指標邏輯與即時模式完全相同。'
-    : rtOK
-      ? '盤中現價來自 FinMind 即時快照（taiwan_stock_tick_snapshot，交易所撮合價），交易時段約每 20 秒更新，並以最新價重算所有技術指標；日K、法人與融資券歷史亦來自 FinMind。'
-      : 'FinMind 提供日K（收盤）資料；盤中即時快照此刻無回應（非交易時段或需 FinMind Token），目前顯示最新收盤。';
+    : dailyHasToday
+      ? '今日正式日線已出，現價與漲跌採用 FinMind 日線收盤（最終校正）；法人與融資券歷史亦來自 FinMind。'
+      : rtOK
+        ? `盤中現價來源：${usedSrc}（13:25 前 FinMind 快照、13:25 後 TWSE 官方 MIS 最終成交，收盤後改採正式日線），約每 20 秒更新並以最新價重算指標。`
+        : 'FinMind 提供日K（收盤）資料；即時來源此刻無回應（非交易時段或需 Token），目前顯示最新收盤。';
   scheduleRealtime(id);
   loadMacro(); // 大盤環境（VIXTWN / 加權 / 匯率），與個股無關，載入後自動繪圖
 }
