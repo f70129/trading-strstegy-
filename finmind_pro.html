@@ -156,6 +156,21 @@ main{padding:14px;max-width:1680px;margin:0 auto}
 .sig.n .ic{background:var(--accent-soft);color:var(--accent)}
 .empty{color:var(--muted);font-size:12px;text-align:center;padding:20px}
 
+/* AAII */
+.aaii-wrap{display:grid;grid-template-columns:330px 1fr;gap:20px}
+@media(max-width:820px){.aaii-wrap{grid-template-columns:1fr}}
+.aaii-latest{display:flex;flex-direction:column;gap:10px;min-width:0}
+.aaii-wk{font-size:12px;color:var(--muted)}
+.aaii-wk span{font-family:var(--font-mono);color:var(--ink);font-weight:600}
+.aaii-bar{display:flex;height:30px;border-radius:8px;overflow:hidden;background:var(--panel-2)}
+.aaii-bar>i{display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;font-family:var(--font-mono);min-width:0;transition:width .4s ease}
+.aaii-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--ink-2)}
+.aaii-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.aaii-legend b{font-family:var(--font-mono);font-weight:600;color:var(--ink)}
+.aaii-spread{font-size:12.5px;color:var(--ink-2);background:var(--panel-2);border:1px solid var(--border);border-radius:9px;padding:9px 11px;line-height:1.55}
+.aaii-spread b{font-family:var(--font-mono)}
+.aaii-trend{min-width:0}
+
 /* advice */
 .advice-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;margin-bottom:14px}
 .advice-verdict{font-size:24px;font-weight:700;padding:2px 14px;border-radius:10px;line-height:1.3}
@@ -333,6 +348,26 @@ footer b{color:var(--ink-2)}
     <section class="card col-5">
       <div class="hd"><span class="t">即時技術訊號</span><span class="s">依最新交易日條件判定</span></div>
       <div class="body"><div class="signals" id="signals"></div></div>
+    </section>
+
+    <!-- AAII 美股投資人情緒 -->
+    <section class="card col-12" id="aaiiCard">
+      <div class="hd"><span class="t">AAII 投資人情緒調查</span><span class="s">美股散戶每週多空 · 經典反向指標</span><div class="meta" id="aaiiMeta"></div></div>
+      <div class="body">
+        <div class="aaii-wrap">
+          <div class="aaii-latest">
+            <div class="aaii-wk"><span id="aaiiWeek">—</span> 當週</div>
+            <div class="aaii-bar" id="aaiiBar"></div>
+            <div class="aaii-legend">
+              <span><i style="background:#16a34a"></i>看多 <b id="aaiiBull">—</b></span>
+              <span><i style="background:#9ca3af"></i>中立 <b id="aaiiNeu">—</b></span>
+              <span><i style="background:#dc2626"></i>看空 <b id="aaiiBear">—</b></span>
+            </div>
+            <div class="aaii-spread" id="aaiiSpread"></div>
+          </div>
+          <div class="aaii-trend"><div id="chart-aaii" class="echart" style="height:230px"></div></div>
+        </div>
+      </div>
     </section>
 
     <!-- 綜合研判與操作建議 -->
@@ -645,6 +680,7 @@ async function loadAll(){
         : 'FinMind 提供日K（收盤）資料；即時來源此刻無回應（非交易時段或需 Token），目前顯示最新收盤。';
   scheduleRealtime(id);
   loadMacro(); // 大盤環境（VIXTWN / 加權 / 匯率），與個股無關，載入後自動繪圖
+  if(!AAII)loadAAII(); // AAII 美股情緒（每週），與個股無關，載入一次即快取
 }
 function setStatus(mode,extra){
   const dot=document.getElementById('statusDot'),tx=document.getElementById('statusTxt'),lbl=document.getElementById('priceLbl');
@@ -678,7 +714,7 @@ function updateHeader(id,name){
 /* ---------- render orchestrator ---------- */
 function renderAll(){
   if(!PRICE.length)return;
-  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,renderAdvice]
+  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawAAII,renderAdvice]
     .forEach(fn=>{try{fn();}catch(e){console.error(fn.name,e);}});
   requestAnimationFrame(()=>Object.values(charts).forEach(c=>c&&c.resize()));
 }
@@ -735,7 +771,7 @@ function renderMACD(){
   metaChip('macdMeta',o>=0?'up':'down',(o>=0?'紅棒 ':'綠棒 ')+o.toFixed(2));
 }
 /* ---------- 大盤環境：VIXTWN / 加權指數 / 台美匯率（三堆疊，各自刻度）---------- */
-let MACRO=null, MACRO_LOADING=false;
+let MACRO=null, MACRO_LOADING=false, AAII=null;
 async function yGet(sym,range){
   try{
     const r=await fetch(`/api/yahoo?symbol=${encodeURIComponent(sym)}&range=${range}&interval=1d`);
@@ -1032,6 +1068,57 @@ function renderAdvice(){
   document.getElementById('adviceLevels').innerHTML=levels.map(x=>`<div class="lvrow"><span class="k">${x.k}</span><span class="v">${x.v}</span></div>`).join('');
   document.getElementById('adviceNote').innerHTML=`${macroNote} ${posNote} 綜合技術評分 <b>${t}</b>/100（${SCORE.label}）；利多 ${uniq(pos).length} 項、風險 ${uniq(neg).length} 項。`;
   metaChip('adviceMeta',verdict==='偏多'?'up':verdict==='中性'?'warn':'down',`評分 ${t} · ${verdict}`);
+}
+
+/* ---------- AAII 美股投資人情緒（每週，資料由 GitHub Action 寫入 data/aaii.json）---------- */
+async function loadAAII(){
+  try{
+    const r=await fetch('aaii.json',{cache:'no-store'});
+    if(r.ok){const j=await r.json(); if(j&&Array.isArray(j.data)&&j.data.length){AAII=j;}}
+  }catch(e){}
+  drawAAII();
+}
+function drawAAII(){
+  const card=document.getElementById('aaiiCard'); if(!card)return;
+  const p=pal();
+  const G='#16a34a', N='#9ca3af', R='#dc2626';
+  if(!AAII||!AAII.data||!AAII.data.length){
+    metaChip('aaiiMeta','neu','無資料');
+    const c=mk('chart-aaii'); if(c)c.setOption({graphic:{type:'text',left:'center',top:'middle',style:{text:'AAII 資料載入中／需部署站 aaii.json',fill:p.muted,font:'12px sans-serif'}}},true);
+    return;
+  }
+  const rows=AAII.data, last=rows[rows.length-1];
+  const fmtd=s=>{const [y,m,d]=s.split('-');return `${+m}/${+d}`;};
+  // 最新一週 100% 堆疊橫條
+  document.getElementById('aaiiWeek').textContent=last.week;
+  document.getElementById('aaiiBull').textContent=last.bull.toFixed(1)+'%';
+  document.getElementById('aaiiNeu').textContent=last.neutral.toFixed(1)+'%';
+  document.getElementById('aaiiBear').textContent=last.bear.toFixed(1)+'%';
+  const seg=(w,c,t)=>`<i style="width:${w}%;background:${c}">${w>=10?t:''}</i>`;
+  document.getElementById('aaiiBar').innerHTML=seg(last.bull,G,last.bull.toFixed(1)+'%')+seg(last.neutral,N,last.neutral.toFixed(1)+'%')+seg(last.bear,R,last.bear.toFixed(1)+'%');
+  // Bull-Bear 價差（反向指標核心）+ 歷史均值對照
+  const spread=last.bull-last.bear;
+  const avgBull=38.8, avgBear=30.6; // AAII 長期均值
+  let tone = spread<=-10 ? '散戶極度悲觀（反向偏多訊號）' : spread>=10 ? '散戶偏樂觀（追高留意）' : '多空分歧';
+  document.getElementById('aaiiSpread').innerHTML=
+    `多空價差 (Bull−Bear)：<b class="${spread>=0?'':''}" style="color:${spread>=0?G:R}">${spread>=0?'+':''}${spread.toFixed(1)}%</b> · ${tone}<br>`+
+    `<span style="color:var(--muted)">歷史均值 看多 ${avgBull}%／看空 ${avgBear}%；本週看空 ${last.bear.toFixed(1)}% ${last.bear>avgBear?'高於':'低於'}均值</span>`;
+  metaChip('aaiiMeta', spread<=-10?'up':spread>=10?'down':'warn', `多空價差 ${spread>=0?'+':''}${spread.toFixed(1)}%`);
+  // 趨勢：近 ~24 週 100% 堆疊柱
+  const d=rows.slice(-24);
+  const c=mk('chart-aaii'); if(!c)return;
+  c.setOption({animation:false,
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},backgroundColor:p.panel,borderColor:p.border,borderWidth:1,textStyle:{color:p.ink,fontSize:11},
+      valueFormatter:v=>v==null?'—':(+v).toFixed(1)+'%'},
+    legend:{data:['看多','中立','看空'],textStyle:{color:p.muted,fontSize:10},top:0,itemWidth:12,itemHeight:8},
+    grid:{left:38,right:14,top:26,bottom:24},
+    xAxis:{type:'category',data:d.map(x=>fmtd(x.week)),axisLabel:{color:p.muted,fontSize:9,interval:Math.ceil(d.length/12)},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}},
+    yAxis:{type:'value',max:100,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9,formatter:'{value}%'},axisLine:{show:false},axisTick:{show:false}},
+    series:[
+      {name:'看多',type:'bar',stack:'s',data:d.map(x=>x.bull),itemStyle:{color:G}},
+      {name:'中立',type:'bar',stack:'s',data:d.map(x=>x.neutral),itemStyle:{color:N}},
+      {name:'看空',type:'bar',stack:'s',data:d.map(x=>x.bear),itemStyle:{color:R}}
+    ]},true);
 }
 
 /* ---------- settings ---------- */

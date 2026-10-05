@@ -1,0 +1,33 @@
+name: Update AAII sentiment
+
+on:
+  schedule:
+    # AAII publishes every Thursday; refresh Friday 13:00 UTC (and allow manual runs)
+    - cron: "0 13 * * 5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet requests pandas xlrd openpyxl
+      - name: Fetch AAII sentiment
+        run: python scripts/fetch_aaii.py
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add aaii.json
+          if git diff --staged --quiet; then
+            echo "No change in AAII data."
+          else
+            git commit -m "chore: update AAII sentiment data"
+            git push
+          fi
