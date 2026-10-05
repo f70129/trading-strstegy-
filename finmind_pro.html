@@ -369,7 +369,7 @@ footer b{color:var(--ink-2)}
 const API='https://api.finmindtrade.com/api/v4/data';
 const charts={};
 let PRICE=[], INST=[], MARGIN=[], IND=null;
-let pollTimer=null, currentName='', currentId='', SCORE=null;
+let pollTimer=null, currentName='', currentId='', SCORE=null, rtPrevClose=null;
 
 /* ---------- theme ---------- */
 function currentTheme(){
@@ -515,10 +515,12 @@ function parseSnapshot(d){
   if(px==null||px<=0)return null;
   const o=num(d.open ?? d.Open), h=num(d.high ?? d.High), l=num(d.low ?? d.Low);
   const sh=num(d.TradeVolume ?? d.trade_volume ?? d.volume); // 累積成交股數
+  const chg=num(d.change_price ?? d.changePrice ?? d.change); // 官方漲跌（對參考昨收）
+  const prevClose=(chg!=null)?+(px-chg).toFixed(2):null;      // 官方參考昨收
   const ds=(d.date||'').slice(0,10), tm=(d.date||'').slice(11,19);
-  try{console.log('[FinMind 即時快照]',{代號:d.stock_id,現價:px,開:o,高:h,低:l,累量股:sh,時間:d.date});}catch(e){}
+  try{console.log('[FinMind 即時快照]',{代號:d.stock_id,現價:px,開:o,高:h,低:l,漲跌:chg,昨收:prevClose,累量股:sh,時間:d.date});}catch(e){}
   return {price:px, open:o, high:(h!=null?Math.max(h,px):px), low:(l!=null?Math.min(l,px):px),
-    vol:(sh!=null?Math.round(sh/1000):null), date:ds||null, time:tm||'', src:'FinMind即時'};
+    prevClose, vol:(sh!=null?Math.round(sh/1000):null), date:ds||null, time:tm||'', src:'FinMind即時'};
 }
 async function fetchRealtime(id){
   const token=(localStorage.getItem('fm_token')||'').trim();
@@ -541,6 +543,7 @@ function mergeRealtime(rt){
     max:Math.max(rt.high??rt.price,rt.price),min:Math.min(rt.low??rt.price,rt.price),
     vol:rt.vol!=null?rt.vol:last.vol};
   if(d>last.date)PRICE.push(bar); else Object.assign(last,bar);
+  rtPrevClose = (rt.prevClose!=null)? rt.prevClose : null; // 以官方昨收算漲跌
   IND=computeIndicators();
   return true;
 }
@@ -564,6 +567,7 @@ function scheduleRealtime(id){
 async function loadAll(){
   const id=(document.getElementById('stockInput').value||'2360').trim();
   document.getElementById('loading').classList.add('on');
+  rtPrevClose=null;
   const start=daysAgo(200);
   let live=true, name='';
   try{
@@ -624,7 +628,9 @@ function updateHeader(id,name){
   const L=PRICE.at(-1),P=PRICE.at(-2)||L;
   document.getElementById('stockName').textContent=(name?name+' ':'')+id;
   document.getElementById('dateBadge').textContent=L.date.slice(5);
-  const chg=L.close-P.close, pct=chg/P.close*100;
+  // 即時模式優先用快照官方昨收；否則用日K前一筆
+  const prevClose=(rtPrevClose!=null)?rtPrevClose:P.close;
+  const chg=L.close-prevClose, pct=chg/prevClose*100;
   const cls=chg>0?'up':chg<0?'down':'flat',sign=chg>0?'+':'';
   const set=(el,v,c)=>{const e=document.getElementById(el);e.textContent=v;e.className='vl num'+(c?' '+c:'');};
   set('s-price',L.close.toFixed(2),cls);
