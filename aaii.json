@@ -1,0 +1,11 @@
+{
+  "source": "AAII Investor Sentiment Survey (https://www.aaii.com/sentimentsurvey)",
+  "updated": "2026-09-30",
+  "note": "seed data; refreshed weekly by .github/workflows/aaii.yml",
+  "data": [
+    { "week": "2026-09-09", "bull": 38.0, "neutral": 22.7, "bear": 39.3 },
+    { "week": "2026-09-16", "bull": 28.8, "neutral": 17.9, "bear": 53.3 },
+    { "week": "2026-09-23", "bull": 32.7, "neutral": 19.2, "bear": 48.1 },
+    { "week": "2026-09-30", "bull": 34.6, "neutral": 18.9, "bear": 46.5 }
+  ]
+}
