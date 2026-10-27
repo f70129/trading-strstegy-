@@ -203,6 +203,7 @@ main{padding:14px;max-width:1680px;margin:0 auto}
 .finra-charts{display:grid;grid-template-columns:1fr 1fr;gap:18px}
 @media(max-width:760px){.finra-charts{grid-template-columns:1fr}}
 .mini-title{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:2px}
+.pcc-alert{padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600;line-height:1.5;margin-bottom:14px}
 
 /* advice */
 .advice-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;margin-bottom:14px}
@@ -450,6 +451,22 @@ footer b{color:var(--ink-2)}
           <div><div class="mini-title">現金緩衝比（%，越高越保守）</div><div id="chart-finra-cushion" class="echart" style="height:200px"></div></div>
         </div>
         <div class="mg-note" id="finraNote"></div>
+      </div>
+    </section>
+
+    <!-- CBOE 股票 Put/Call 比率 -->
+    <section class="card col-12" id="pccCard">
+      <div class="hd"><span class="t">CBOE 股票 Put/Call 比率</span><span class="s">美股每日反向情緒 · 恐慌=潛在買點</span><div class="meta" id="pccMeta"></div></div>
+      <div class="body">
+        <div id="pccAlert" class="pcc-alert">—</div>
+        <div class="finra-stats">
+          <div class="ftile"><span class="lb">最新 P/C</span><span class="vv" id="pccLast">—</span><span class="sub" id="pccDate">—</span></div>
+          <div class="ftile"><span class="lb">10日均</span><span class="vv" id="pccMa">—</span></div>
+          <div class="ftile"><span class="lb">一年百分位</span><span class="vv" id="pccPct">—</span><span class="sub">越高＝越恐慌</span></div>
+          <div class="ftile"><span class="lb">訊號</span><span class="vv" style="font-size:16px"><span class="pill sm" id="pccPill">—</span></span></div>
+        </div>
+        <div id="chart-pcc" class="echart" style="height:230px;margin-top:4px"></div>
+        <div class="mg-note" id="pccNote"></div>
       </div>
     </section>
 
@@ -769,6 +786,7 @@ async function loadAll(){
   if(!AAII)loadAAII(); // AAII 美股情緒（每週），與個股無關，載入一次即快取
   if(!MKT)loadMarketMargin(); // 大盤融資維持率 + 整體市場融資融券，與個股無關，載入一次即快取
   if(!FINRA)loadFINRA(); // 美國 FINRA 月度融資餘額，與個股無關，載入一次即快取
+  if(!PCC)loadPCC(); // CBOE 股票 Put/Call 比率（每日），與個股無關，載入一次即快取
 }
 function setStatus(mode,extra){
   const dot=document.getElementById('statusDot'),tx=document.getElementById('statusTxt'),lbl=document.getElementById('priceLbl');
@@ -802,7 +820,7 @@ function updateHeader(id,name){
 /* ---------- render orchestrator ---------- */
 function renderAll(){
   if(!PRICE.length)return;
-  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawAAII,renderStockMargin,drawMarketMargin,drawFINRA,renderAdvice]
+  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawAAII,renderStockMargin,drawMarketMargin,drawFINRA,drawPCC,renderAdvice]
     .forEach(fn=>{try{fn();}catch(e){console.error(fn.name,e);}});
   requestAnimationFrame(()=>Object.values(charts).forEach(c=>c&&c.resize()));
 }
@@ -859,7 +877,7 @@ function renderMACD(){
   metaChip('macdMeta',o>=0?'up':'down',(o>=0?'紅棒 ':'綠棒 ')+o.toFixed(2));
 }
 /* ---------- 大盤環境：VIXTWN / 加權指數 / 台美匯率（三堆疊，各自刻度）---------- */
-let MACRO=null, MACRO_LOADING=false, AAII=null, MKT=null, MKT_LOADING=false, FINRA=null;
+let MACRO=null, MACRO_LOADING=false, AAII=null, MKT=null, MKT_LOADING=false, FINRA=null, PCC=null;
 async function yGet(sym,range){
   try{
     const r=await fetch(`/api/yahoo?symbol=${encodeURIComponent(sym)}&range=${range}&interval=1d`);
@@ -1364,6 +1382,62 @@ function drawFINRA(){
     xAxis:{type:'category',data:dd.map(x=>x.month),axisLabel:{color:p.muted,fontSize:9,interval:Math.ceil(dd.length/8)},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}},
     yAxis:{type:'value',scale:true,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9,formatter:'{value}%'},axisLine:{show:false},axisTick:{show:false}},
     series:[{type:'line',data:cush,showSymbol:false,smooth:true,connectNulls:true,lineStyle:{width:1.8,color:'#a78bfa'}}]},true);
+}
+
+/* ---------- CBOE 股票 Put/Call 比率（每日反向情緒）---------- */
+async function loadPCC(){
+  try{ const r=await fetch('pcc.json',{cache:'no-store'}); if(r.ok){const j=await r.json(); if(j&&Array.isArray(j.data))PCC=j;} }catch(e){}
+  drawPCC();
+}
+function drawPCC(){
+  const card=document.getElementById('pccCard'); if(!card)return; const p=pal();
+  const d=(PCC&&PCC.data)?PCC.data:[];
+  const al=document.getElementById('pccAlert');
+  if(!d.length){
+    metaChip('pccMeta','neu','等待 CBOE 資料'); if(al)al.style.display='none';
+    const nt=document.getElementById('pccNote'); if(nt)nt.textContent='';
+    const c=mk('chart-pcc'); if(c)c.setOption({graphic:{type:'text',left:'center',top:'middle',style:{text:'CBOE Put/Call 資料由每日 GitHub Action 寫入 pcc.json；首次執行後顯示',fill:p.muted,font:'12px sans-serif'}}},true);
+    return;
+  }
+  const pc=d.map(x=>x.pc);
+  const sma10=pc.map((_,i)=> i<9?null : +(pc.slice(i-9,i+1).reduce((a,b)=>a+b,0)/10).toFixed(3));
+  const last=d[d.length-1], lastMa=sma10[sma10.length-1]??last.pc;
+  const win=sma10.slice(-252).filter(x=>x!=null);
+  let pct=null; if(win.length){let c=0;for(const x of win)if(x<=lastMa)c++;pct=c/win.length*100;}
+  document.getElementById('pccLast').textContent=last.pc.toFixed(2);
+  document.getElementById('pccDate').textContent=last.date;
+  document.getElementById('pccMa').textContent=lastMa.toFixed(2);
+  document.getElementById('pccPct').textContent=pct!=null?pct.toFixed(0)+'%':'—';
+  const P=pct!=null?pct:50; let lbl,cls,txt;
+  if(P>=85){lbl='極度恐慌·買點';cls='safe';txt='🟢 散戶 Put 爆量、極度看空——反向買點浮現，通常是中短線低接區；仍須搭配價格止跌訊號分批佈局。';}
+  else if(P>=70){lbl='恐慌觀察';cls='safe';txt='🟢 看空情緒偏濃，接近反向偏多區，留意落底訊號。';}
+  else if(P>35){lbl='中性';cls='warn';txt='⚪ 多空情緒中性，無極端訊號。';}
+  else if(P>15){lbl='偏貪婪';cls='warn';txt='🟠 Put 偏少、情緒偏樂觀，追高宜謹慎。';}
+  else{lbl='過度樂觀·警示';cls='danger';txt='🔴 市場極度樂觀、避險極少——常見於階段高點附近，留意回檔風險。';}
+  const pill=document.getElementById('pccPill'); pill.textContent=lbl; pill.className='pill sm '+cls;
+  const col={safe:'#16a34a',warn:'#d97706',danger:'#dc2626'}[cls], bg={safe:'rgba(22,163,74,.12)',warn:'rgba(217,119,6,.12)',danger:'rgba(220,38,38,.12)'}[cls];
+  al.style.display='block'; al.textContent=txt; al.style.background=bg; al.style.color=col; al.style.border='1px solid '+col+'55';
+  metaChip('pccMeta',cls==='safe'?'up':cls==='danger'?'down':'warn',lbl);
+  document.getElementById('pccNote').innerHTML=`最新 ${last.date} 股票 P/C = <b>${last.pc.toFixed(2)}</b>（10日均 ${lastMa.toFixed(2)}、一年百分位 ${pct!=null?pct.toFixed(0)+'%':'—'}）。<span style="color:var(--muted)">P/C = Put 量 ÷ Call 量，越高代表避險/看空越多，為反向指標（極高常見於恐慌底部）。訊號採 10 日均之一年期百分位（≥85 買點 / ≤15 警示），僅供參考，非投資建議。</span>`;
+  const dd=d.slice(-120), mm=sma10.slice(-120);
+  const sw=win.slice().sort((a,b)=>a-b);
+  const q=f=> sw.length? sw[Math.min(sw.length-1,Math.floor(f*(sw.length-1)))] : null;
+  const hi=q(0.85), lo=q(0.15);
+  const c=mk('chart-pcc');
+  if(c)c.setOption({animation:false,
+    tooltip:{trigger:'axis',backgroundColor:p.panel,borderColor:p.border,borderWidth:1,textStyle:{color:p.ink,fontSize:11},valueFormatter:v=>v==null?'—':(+v).toFixed(2)},
+    legend:{data:['每日 P/C','10日均'],textStyle:{color:p.muted,fontSize:10},top:0,itemWidth:12,itemHeight:8},
+    grid:{left:38,right:14,top:26,bottom:24},
+    xAxis:{type:'category',data:dd.map(x=>x.date.slice(5)),axisLabel:{color:p.muted,fontSize:9,interval:Math.ceil(dd.length/10)},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}},
+    yAxis:{type:'value',scale:true,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9},axisLine:{show:false},axisTick:{show:false}},
+    series:[
+      {name:'每日 P/C',type:'line',data:dd.map(x=>x.pc),showSymbol:false,lineStyle:{width:1,color:p.muted,opacity:.5}},
+      {name:'10日均',type:'line',data:mm,showSymbol:false,smooth:true,connectNulls:true,lineStyle:{width:2,color:p.accent},
+        markLine:{symbol:'none',silent:true,data:[
+          hi!=null?{yAxis:+hi.toFixed(2),lineStyle:{color:'#16a34a',type:'dashed',width:1},label:{formatter:'恐慌/買點',color:'#16a34a',fontSize:9,position:'insideEndTop'}}:null,
+          lo!=null?{yAxis:+lo.toFixed(2),lineStyle:{color:'#dc2626',type:'dashed',width:1},label:{formatter:'樂觀/警示',color:'#dc2626',fontSize:9,position:'insideEndBottom'}}:null
+        ].filter(Boolean)}}
+    ]},true);
 }
 
 /* ---------- settings ---------- */
