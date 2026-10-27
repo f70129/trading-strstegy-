@@ -193,6 +193,17 @@ main{padding:14px;max-width:1680px;margin:0 auto}
 .margin-grid .col{min-width:0}
 .mg-note{font-size:12.5px;color:var(--ink-2);line-height:1.6;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:10px}
 
+/* FINRA */
+.finra-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+@media(max-width:760px){.finra-stats{grid-template-columns:repeat(2,1fr)}}
+.ftile{background:var(--panel-2);border:1px solid var(--border);border-radius:11px;padding:11px 13px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.ftile .lb{font-size:11px;color:var(--muted)}
+.ftile .vv{font-family:var(--font-mono);font-size:22px;font-weight:700;line-height:1.1}
+.ftile .sub{font-size:10.5px;color:var(--muted)}
+.finra-charts{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:760px){.finra-charts{grid-template-columns:1fr}}
+.mini-title{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:2px}
+
 /* advice */
 .advice-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;margin-bottom:14px}
 .advice-verdict{font-size:24px;font-weight:700;padding:2px 14px;border-radius:10px;line-height:1.3}
@@ -421,6 +432,24 @@ footer b{color:var(--ink-2)}
           </div>
           <div class="aaii-trend"><div id="chart-aaii" class="echart" style="height:230px"></div></div>
         </div>
+      </div>
+    </section>
+
+    <!-- 美國 FINRA 融資(保證金)統計 -->
+    <section class="card col-12" id="finraCard">
+      <div class="hd"><span class="t">美國 FINRA 融資(保證金)統計</span><span class="s">月度 · Margin Debt 與現金緩衝比</span><div class="meta" id="finraMeta"></div></div>
+      <div class="body">
+        <div class="finra-stats">
+          <div class="ftile"><span class="lb">融資餘額 Margin Debt</span><span class="vv" id="finraDebt">—</span><span class="sub" id="finraDebtSub">—</span></div>
+          <div class="ftile"><span class="lb">月變化 MoM</span><span class="vv" id="finraMoM">—</span></div>
+          <div class="ftile"><span class="lb">年變化 YoY</span><span class="vv" id="finraYoY">—</span><span class="sub">槓桿擴張/收縮</span></div>
+          <div class="ftile"><span class="lb">現金緩衝比</span><span class="vv" id="finraCushion">—</span><span class="sub">自由現金 ÷ 融資餘額</span></div>
+        </div>
+        <div class="finra-charts">
+          <div><div class="mini-title">Margin Debt（十億美元）</div><div id="chart-finra-debt" class="echart" style="height:200px"></div></div>
+          <div><div class="mini-title">現金緩衝比（%，越高越保守）</div><div id="chart-finra-cushion" class="echart" style="height:200px"></div></div>
+        </div>
+        <div class="mg-note" id="finraNote"></div>
       </div>
     </section>
 
@@ -739,6 +768,7 @@ async function loadAll(){
   loadMacro(); // 大盤環境（VIXTWN / 加權 / 匯率），與個股無關，載入後自動繪圖
   if(!AAII)loadAAII(); // AAII 美股情緒（每週），與個股無關，載入一次即快取
   if(!MKT)loadMarketMargin(); // 大盤融資維持率 + 整體市場融資融券，與個股無關，載入一次即快取
+  if(!FINRA)loadFINRA(); // 美國 FINRA 月度融資餘額，與個股無關，載入一次即快取
 }
 function setStatus(mode,extra){
   const dot=document.getElementById('statusDot'),tx=document.getElementById('statusTxt'),lbl=document.getElementById('priceLbl');
@@ -772,7 +802,7 @@ function updateHeader(id,name){
 /* ---------- render orchestrator ---------- */
 function renderAll(){
   if(!PRICE.length)return;
-  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawAAII,renderStockMargin,drawMarketMargin,renderAdvice]
+  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawAAII,renderStockMargin,drawMarketMargin,drawFINRA,renderAdvice]
     .forEach(fn=>{try{fn();}catch(e){console.error(fn.name,e);}});
   requestAnimationFrame(()=>Object.values(charts).forEach(c=>c&&c.resize()));
 }
@@ -829,7 +859,7 @@ function renderMACD(){
   metaChip('macdMeta',o>=0?'up':'down',(o>=0?'紅棒 ':'綠棒 ')+o.toFixed(2));
 }
 /* ---------- 大盤環境：VIXTWN / 加權指數 / 台美匯率（三堆疊，各自刻度）---------- */
-let MACRO=null, MACRO_LOADING=false, AAII=null, MKT=null, MKT_LOADING=false;
+let MACRO=null, MACRO_LOADING=false, AAII=null, MKT=null, MKT_LOADING=false, FINRA=null;
 async function yGet(sym,range){
   try{
     const r=await fetch(`/api/yahoo?symbol=${encodeURIComponent(sym)}&range=${range}&interval=1d`);
@@ -1288,6 +1318,52 @@ function renderStockMargin(){
   rows.forEach(r=>{ const md=(r.marginPrev!=null)?r.margin-r.marginPrev:null, ratio=r.margin>0?r.shortB/r.margin*100:null, mv=mMap[r.date];
     html+=`<tr><td>${r.date.slice(5)}</td><td>${fmtInt(r.margin)}</td><td class="${md>=0?'up':'down'}">${md!=null?(md>=0?'+':'')+fmtInt(md):'—'}</td><td>${fmtInt(r.shortB)}</td><td>${ratio!=null?ratio.toFixed(1)+'%':'—'}</td><td>${mv!=null?mv.toFixed(1):'—'}</td></tr>`; });
   t.innerHTML=html+'</tbody>';
+}
+
+/* ---------- 美國 FINRA 融資(保證金)統計 ---------- */
+async function loadFINRA(){
+  try{ const r=await fetch('finra.json',{cache:'no-store'}); if(r.ok){const j=await r.json(); if(j&&Array.isArray(j.data))FINRA=j;} }catch(e){}
+  drawFINRA();
+}
+function drawFINRA(){
+  const card=document.getElementById('finraCard'); if(!card)return; const p=pal();
+  const d=(FINRA&&FINRA.data)?FINRA.data:[];
+  if(!d.length){
+    metaChip('finraMeta','neu','等待 FINRA 資料');
+    const nt=document.getElementById('finraNote'); if(nt)nt.textContent='FINRA 月報資料由每月排程的 GitHub Action 寫入 finra.json；首次執行後顯示。';
+    ['chart-finra-debt','chart-finra-cushion'].forEach(id=>{const c=mk(id);if(c)c.setOption({graphic:{type:'text',left:'center',top:'middle',style:{text:'等待 FINRA 資料…',fill:p.muted,font:'12px sans-serif'}}},true);});
+    return;
+  }
+  const last=d[d.length-1], prev=d.length>1?d[d.length-2]:null, yoy=d[d.length>12?d.length-13:0];
+  const debtB=last.debit/1000;
+  document.getElementById('finraDebt').textContent='$'+debtB.toLocaleString('en-US',{maximumFractionDigits:0})+'B';
+  document.getElementById('finraDebtSub').textContent=last.month;
+  const mom=prev&&prev.debit?(last.debit-prev.debit)/prev.debit*100:null;
+  const yoyPct=yoy&&yoy.debit?(last.debit-yoy.debit)/yoy.debit*100:null;
+  const setPct=(id,v)=>{const e=document.getElementById(id);if(!e)return; if(v==null){e.textContent='—';e.style.color='';return;} e.textContent=(v>=0?'+':'')+v.toFixed(1)+'%'; e.style.color=v>=0?'#16a34a':'#dc2626';};
+  setPct('finraMoM',mom); setPct('finraYoY',yoyPct);
+  const fc=(last.fc_cash!=null?last.fc_cash:0)+(last.fc_margin!=null?last.fc_margin:0);
+  const cushion=(last.fc_cash!=null&&last.debit)?fc/last.debit*100:null;
+  document.getElementById('finraCushion').textContent=cushion!=null?cushion.toFixed(1)+'%':'—';
+  metaChip('finraMeta',yoyPct!=null?(yoyPct>0?'warn':'up'):'neu', last.month+' · $'+debtB.toFixed(0)+'B');
+  let tone = yoyPct==null?'' : yoyPct>25?'融資餘額年增幅偏高，市場槓桿偏熱，歷史上常見於漲多階段，留意回檔時的去槓桿賣壓。' : yoyPct<-10?'融資餘額年減，市場去槓桿，常見於修正／打底階段。':'融資餘額年變化溫和。';
+  document.getElementById('finraNote').innerHTML=`${last.month} 融資餘額 <b>$${debtB.toFixed(0)}B</b>（MoM ${mom!=null?(mom>=0?'+':'')+mom.toFixed(1)+'%':'—'}、YoY ${yoyPct!=null?(yoyPct>=0?'+':'')+yoyPct.toFixed(1)+'%':'—'}）。${tone} <span style="color:var(--muted)">※ FINRA 無官方維持率，「現金緩衝比」為自由現金餘額 ÷ 融資餘額之衍生指標，越高代表槓桿緩衝越厚。來源 FINRA，單位 ${FINRA.unit||'USD millions'}。</span>`;
+  const dd=d.slice(-48);
+  const cd=mk('chart-finra-debt');
+  if(cd)cd.setOption({animation:false,
+    tooltip:{trigger:'axis',backgroundColor:p.panel,borderColor:p.border,borderWidth:1,textStyle:{color:p.ink,fontSize:11},valueFormatter:v=>'$'+(+v).toFixed(0)+'B'},
+    grid:{left:46,right:12,top:12,bottom:22},
+    xAxis:{type:'category',data:dd.map(x=>x.month),axisLabel:{color:p.muted,fontSize:9,interval:Math.ceil(dd.length/8)},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}},
+    yAxis:{type:'value',scale:true,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9},axisLine:{show:false},axisTick:{show:false}},
+    series:[{type:'line',data:dd.map(x=>+(x.debit/1000).toFixed(0)),showSymbol:false,smooth:true,areaStyle:{color:'rgba(63,182,240,.12)'},lineStyle:{width:1.8,color:p.accent}}]},true);
+  const cc=mk('chart-finra-cushion');
+  const cush=dd.map(x=>{const f=(x.fc_cash!=null?x.fc_cash:0)+(x.fc_margin!=null?x.fc_margin:0); return (x.fc_cash!=null&&x.debit)?+(f/x.debit*100).toFixed(1):null;});
+  if(cc)cc.setOption({animation:false,
+    tooltip:{trigger:'axis',backgroundColor:p.panel,borderColor:p.border,borderWidth:1,textStyle:{color:p.ink,fontSize:11},valueFormatter:v=>v==null?'—':(+v).toFixed(1)+'%'},
+    grid:{left:40,right:12,top:12,bottom:22},
+    xAxis:{type:'category',data:dd.map(x=>x.month),axisLabel:{color:p.muted,fontSize:9,interval:Math.ceil(dd.length/8)},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}},
+    yAxis:{type:'value',scale:true,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9,formatter:'{value}%'},axisLine:{show:false},axisTick:{show:false}},
+    series:[{type:'line',data:cush,showSymbol:false,smooth:true,connectNulls:true,lineStyle:{width:1.8,color:'#a78bfa'}}]},true);
 }
 
 /* ---------- settings ---------- */

@@ -1,0 +1,8 @@
+{
+  "source": "FINRA Margin Statistics (https://www.finra.org/investors/margin-statistics)",
+  "unit": "USD millions",
+  "updated": "pending",
+  "note": "populated by .github/workflows/finra.yml on first run",
+  "count": 0,
+  "data": []
+}
