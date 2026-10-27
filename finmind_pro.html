@@ -204,6 +204,14 @@ main{padding:14px;max-width:1680px;margin:0 auto}
 @media(max-width:760px){.finra-charts{grid-template-columns:1fr}}
 .mini-title{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:2px}
 .pcc-alert{padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600;line-height:1.5;margin-bottom:14px}
+/* risk overview */
+.risk-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+@media(max-width:900px){.risk-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:480px){.risk-grid{grid-template-columns:1fr}}
+.rtile{background:var(--panel-2);border:1px solid var(--border);border-left:3px solid var(--border);border-radius:11px;padding:10px 12px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.rtile .rn{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rtile .rv{font-family:var(--font-mono);font-size:21px;font-weight:700;line-height:1.1}
+.rtile .rs{font-size:11px;font-weight:600}
 
 /* advice */
 .advice-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;margin-bottom:14px}
@@ -318,6 +326,15 @@ footer b{color:var(--ink-2)}
 
 <main>
   <div class="grid">
+
+    <!-- 全球/美股風險總覽 -->
+    <section class="card col-12" id="riskCard">
+      <div class="hd"><span class="t">全球 / 美股風險總覽</span><span class="s">整合台美情緒與槓桿指標 · 一眼看風險傾向</span><div class="meta" id="riskMeta"></div></div>
+      <div class="body">
+        <div id="riskSummary" class="pcc-alert">載入中…</div>
+        <div class="risk-grid" id="riskTiles"></div>
+      </div>
+    </section>
 
     <!-- Main price chart -->
     <section class="card col-8">
@@ -820,7 +837,7 @@ function updateHeader(id,name){
 /* ---------- render orchestrator ---------- */
 function renderAll(){
   if(!PRICE.length)return;
-  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawAAII,renderStockMargin,drawMarketMargin,drawFINRA,drawPCC,renderAdvice]
+  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawAAII,renderStockMargin,drawMarketMargin,drawFINRA,drawPCC,drawRiskOverview,renderAdvice]
     .forEach(fn=>{try{fn();}catch(e){console.error(fn.name,e);}});
   requestAnimationFrame(()=>Object.values(charts).forEach(c=>c&&c.resize()));
 }
@@ -931,6 +948,7 @@ async function loadMacro(){
   MACRO_LOADING=false;
   drawMacro();
   try{renderAdvice();}catch(e){}
+  try{drawRiskOverview();}catch(e){}
 }
 function drawMacro(){
   const el=document.getElementById('chart-macro'); if(!el)return;
@@ -1182,7 +1200,7 @@ async function loadAAII(){
     const r=await fetch('aaii.json',{cache:'no-store'});
     if(r.ok){const j=await r.json(); if(j&&Array.isArray(j.data)&&j.data.length){AAII=j;}}
   }catch(e){}
-  drawAAII();
+  drawAAII(); try{drawRiskOverview();}catch(e){}
 }
 function drawAAII(){
   const card=document.getElementById('aaiiCard'); if(!card)return;
@@ -1277,6 +1295,7 @@ async function loadMarketMargin(){
   MKT={points, maint, src};
   MKT_LOADING=false;
   drawMarketMargin();
+  try{drawRiskOverview();}catch(e){}
 }
 function drawMarketMargin(){
   const card=document.getElementById('mktMaintCard'); if(!card)return; const p=pal();
@@ -1341,7 +1360,7 @@ function renderStockMargin(){
 /* ---------- 美國 FINRA 融資(保證金)統計 ---------- */
 async function loadFINRA(){
   try{ const r=await fetch('finra.json',{cache:'no-store'}); if(r.ok){const j=await r.json(); if(j&&Array.isArray(j.data))FINRA=j;} }catch(e){}
-  drawFINRA();
+  drawFINRA(); try{drawRiskOverview();}catch(e){}
 }
 function drawFINRA(){
   const card=document.getElementById('finraCard'); if(!card)return; const p=pal();
@@ -1387,7 +1406,7 @@ function drawFINRA(){
 /* ---------- CBOE 股票 Put/Call 比率（每日反向情緒）---------- */
 async function loadPCC(){
   try{ const r=await fetch('pcc.json',{cache:'no-store'}); if(r.ok){const j=await r.json(); if(j&&Array.isArray(j.data))PCC=j;} }catch(e){}
-  drawPCC();
+  drawPCC(); try{drawRiskOverview();}catch(e){}
 }
 function drawPCC(){
   const card=document.getElementById('pccCard'); if(!card)return; const p=pal();
@@ -1438,6 +1457,49 @@ function drawPCC(){
           lo!=null?{yAxis:+lo.toFixed(2),lineStyle:{color:'#dc2626',type:'dashed',width:1},label:{formatter:'樂觀/警示',color:'#dc2626',fontSize:9,position:'insideEndBottom'}}:null
         ].filter(Boolean)}}
     ]},true);
+}
+
+/* ---------- 全球/美股風險總覽 ---------- */
+function pccPct(){
+  if(!PCC||!PCC.data||!PCC.data.length)return null;
+  const pc=PCC.data.map(x=>x.pc);
+  const sma=pc.map((_,i)=>i<9?null:pc.slice(i-9,i+1).reduce((a,b)=>a+b,0)/10);
+  const lastMa=sma[sma.length-1]??pc[pc.length-1];
+  const win=sma.slice(-252).filter(x=>x!=null); if(!win.length)return null;
+  let c=0;for(const x of win)if(x<=lastMa)c++; return c/win.length*100;
+}
+function drawRiskOverview(){
+  const card=document.getElementById('riskCard'); if(!card)return;
+  const COL={caution:'#dc2626',opportunity:'#16a34a',calm:'#16a34a',neutral:'#9ca3af',na:'var(--border)'};
+  const TXT={caution:'#dc2626',opportunity:'#16a34a',calm:'#16a34a',neutral:'var(--muted)',na:'var(--muted)'};
+  const tiles=[];
+  const vix=MACRO?lastNN(MACRO.sV):null;
+  tiles.push(vix!=null?{n:'台股 VIXTWN',v:vix.toFixed(1),cat:vix>25?'caution':vix<15?'calm':'neutral',s:vix>25?'波動升溫':vix<15?'波動偏低':'中性'}:{n:'台股 VIXTWN',v:'—',cat:'na',s:'載入中'});
+  const mm=(MKT&&MKT.maint&&MKT.maint.length)?MKT.maint[MKT.maint.length-1].v:null;
+  if(mm!=null){const r=maintLabel(mm); tiles.push({n:'大盤融資維持率',v:mm.toFixed(0)+'%',cat:r[1]==='safe'?'calm':r[1]==='warn'?'neutral':'caution',s:r[0]});}
+  else tiles.push({n:'大盤融資維持率',v:'—',cat:'na',s:'載入中'});
+  if(AAII&&AAII.data&&AAII.data.length){const a=AAII.data[AAII.data.length-1],sp=a.bull-a.bear; tiles.push({n:'AAII 多空價差',v:(sp>=0?'+':'')+sp.toFixed(0)+'%',cat:sp<=-10?'opportunity':sp>=15?'caution':'neutral',s:sp<=-10?'散戶悲觀·反向偏多':sp>=15?'散戶樂觀·追高':'中性'});}
+  else tiles.push({n:'AAII 多空價差',v:'—',cat:'na',s:'載入中'});
+  if(FINRA&&FINRA.data&&FINRA.data.length>12){const d=FINRA.data,last=d[d.length-1],yo=d[d.length-13],yoy=yo&&yo.debit?(last.debit-yo.debit)/yo.debit*100:null; tiles.push(yoy!=null?{n:'FINRA 融資 YoY',v:(yoy>=0?'+':'')+yoy.toFixed(0)+'%',cat:yoy>25?'caution':yoy<-10?'opportunity':'neutral',s:yoy>25?'槓桿偏熱':yoy<-10?'去槓桿':'溫和'}:{n:'FINRA 融資 YoY',v:'—',cat:'na',s:'—'});}
+  else tiles.push({n:'FINRA 融資 YoY',v:'—',cat:'na',s:'載入中'});
+  const pp=pccPct();
+  if(pp!=null){const lv=PCC.data[PCC.data.length-1].pc; tiles.push({n:'CBOE Put/Call',v:lv.toFixed(2),cat:pp>=85?'opportunity':pp<=15?'caution':'neutral',s:pp>=85?'恐慌·買點':pp<=15?'過度樂觀·警示':'中性('+pp.toFixed(0)+'%)'});}
+  else tiles.push({n:'CBOE Put/Call',v:'—',cat:'na',s:'載入中'});
+
+  document.getElementById('riskTiles').innerHTML=tiles.map(t=>`<div class="rtile" style="border-left-color:${COL[t.cat]}"><span class="rn">${t.n}</span><span class="rv">${t.v}</span><span class="rs" style="color:${TXT[t.cat]}">${t.s}</span></div>`).join('');
+
+  const avail=tiles.filter(t=>t.cat!=='na');
+  const caution=avail.filter(t=>t.cat==='caution').length, opp=avail.filter(t=>t.cat==='opportunity').length;
+  let msg,cls;
+  if(!avail.length){msg='資料載入中…';cls='warn';}
+  else if(opp>=2&&opp>caution){msg=`🟢 逢低機會浮現：${opp} 項反向指標偏恐慌，留意築底訊號（非買進訊號，仍須配合價格止跌）。`;cls='safe';}
+  else if(caution>=2&&caution>=opp){msg=`🔴 風險偏高：${caution} 項指標示警（高波動／高槓桿／過度樂觀），建議控制部位、提高現金。`;cls='danger';}
+  else if(caution>opp){msg=`🟠 風險略偏高：${caution} 項指標示警，其餘中性。`;cls='warn';}
+  else {msg='⚪ 風險中性：各指標無明顯極端。';cls='warn';}
+  const al=document.getElementById('riskSummary');
+  const col={safe:'#16a34a',warn:'#d97706',danger:'#dc2626'}[cls],bg={safe:'rgba(22,163,74,.12)',warn:'rgba(217,119,6,.12)',danger:'rgba(220,38,38,.12)'}[cls];
+  al.textContent=msg; al.style.background=bg; al.style.color=col; al.style.border='1px solid '+col+'55';
+  metaChip('riskMeta',cls==='safe'?'up':cls==='danger'?'down':'warn', caution+' 警示 / '+opp+' 恐慌');
 }
 
 /* ---------- settings ---------- */
