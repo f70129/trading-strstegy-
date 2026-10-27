@@ -171,6 +171,28 @@ main{padding:14px;max-width:1680px;margin:0 auto}
 .aaii-spread b{font-family:var(--font-mono)}
 .aaii-trend{min-width:0}
 
+/* margin / maintenance */
+.maint-hero{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+.maint-hero .v{font-family:var(--font-mono);font-size:38px;font-weight:700;line-height:1}
+.maint-hero .v small{font-size:15px;color:var(--muted);font-weight:500}
+.pill{display:inline-block;padding:2px 9px;border-radius:7px;font-size:12px;font-weight:700}
+.pill.safe{background:rgba(22,163,74,.14);color:#16a34a}
+.pill.warn{background:rgba(217,119,6,.16);color:#d97706}
+.pill.danger{background:rgba(220,38,38,.15);color:#dc2626}
+.pill.sm{font-size:10.5px;padding:1px 7px}
+.maint-sub{font-size:11.5px;color:var(--muted);margin-top:6px}
+.mtable-wrap{max-height:300px;overflow:auto}
+.mtable{width:100%;border-collapse:collapse;font-size:12px}
+.mtable th{text-align:right;color:var(--muted);font-weight:600;font-size:10.5px;letter-spacing:.02em;padding:6px 8px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel);white-space:nowrap}
+.mtable th:first-child,.mtable td:first-child{text-align:left}
+.mtable td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.mtable tr:last-child td{border-bottom:none}
+.mtable td.up{color:var(--up)} .mtable td.down{color:var(--down)}
+.margin-grid{display:grid;grid-template-columns:260px 1fr 1.2fr;gap:18px}
+@media(max-width:900px){.margin-grid{grid-template-columns:1fr}}
+.margin-grid .col{min-width:0}
+.mg-note{font-size:12.5px;color:var(--ink-2);line-height:1.6;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:10px}
+
 /* advice */
 .advice-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;margin-bottom:14px}
 .advice-verdict{font-size:24px;font-weight:700;padding:2px 14px;border-radius:10px;line-height:1.3}
@@ -348,6 +370,38 @@ footer b{color:var(--ink-2)}
     <section class="card col-5">
       <div class="hd"><span class="t">即時技術訊號</span><span class="s">依最新交易日條件判定</span></div>
       <div class="body"><div class="signals" id="signals"></div></div>
+    </section>
+
+    <!-- 大盤融資維持率 -->
+    <section class="card col-4" id="mktMaintCard">
+      <div class="hd"><span class="t">大盤融資維持率</span><span class="s">全市場追繳風險</span><div class="meta" id="mktMaintMeta"></div></div>
+      <div class="body">
+        <div class="maint-hero"><span class="v" id="mktMaintVal">—<small>%</small></span><span class="pill" id="mktMaintPill">—</span></div>
+        <div class="maint-sub" id="mktMaintSub">載入中…</div>
+        <div id="chart-mktmaint" class="echart" style="height:150px;margin-top:6px"></div>
+      </div>
+    </section>
+
+    <!-- 台股整體市場融資融券表 -->
+    <section class="card col-8" id="mktMarginCard">
+      <div class="hd"><span class="t">台股整體市場融資融券</span><span class="s">上市+上櫃合計 · 單位：張</span><div class="meta" id="mktMarginMeta"></div></div>
+      <div class="body"><div class="mtable-wrap"><table class="mtable" id="mktMarginTable"></table></div></div>
+    </section>
+
+    <!-- 個股融資融券與維持率分析 -->
+    <section class="card col-12" id="stockMaintCard">
+      <div class="hd"><span class="t">個股融資融券與維持率</span><span class="s" id="stockMaintSub">維持率為依收盤價與融資流量之估算</span><div class="meta" id="stockMaintMeta"></div></div>
+      <div class="body">
+        <div class="margin-grid">
+          <div class="col">
+            <div class="maint-hero"><span class="v" id="stMaintVal">—<small>%</small></span><span class="pill" id="stMaintPill">—</span></div>
+            <div class="maint-sub">融資維持率（估）</div>
+            <div class="mg-note" id="stMaintNote">分析中…</div>
+          </div>
+          <div class="col"><div id="chart-stmaint" class="echart" style="height:210px"></div></div>
+          <div class="col"><div class="mtable-wrap"><table class="mtable" id="stockMarginTable"></table></div></div>
+        </div>
+      </div>
     </section>
 
     <!-- AAII 美股投資人情緒 -->
@@ -537,8 +591,11 @@ function normInst(raw,px){
 function normMargin(raw){
   return raw.filter(d=>d.MarginPurchaseTodayBalance!=null).map(d=>({
     date:d.date,
-    margin:+d.MarginPurchaseTodayBalance,     // 融資餘額(張)
-    shortB:+d.ShortSaleTodayBalance            // 融券餘額(張)
+    margin:+d.MarginPurchaseTodayBalance,                 // 融資餘額(張)
+    marginPrev:(d.MarginPurchaseYesterdayBalance!=null?+d.MarginPurchaseYesterdayBalance:null),
+    buy:+d.MarginPurchaseBuy||0, sell:+d.MarginPurchaseSell||0, ret:+d.MarginPurchaseCashRepayment||0,
+    shortB:+d.ShortSaleTodayBalance,                       // 融券餘額(張)
+    shortPrev:(d.ShortSaleYesterdayBalance!=null?+d.ShortSaleYesterdayBalance:null)
   }));
 }
 
@@ -681,6 +738,7 @@ async function loadAll(){
   scheduleRealtime(id);
   loadMacro(); // 大盤環境（VIXTWN / 加權 / 匯率），與個股無關，載入後自動繪圖
   if(!AAII)loadAAII(); // AAII 美股情緒（每週），與個股無關，載入一次即快取
+  if(!MKT)loadMarketMargin(); // 大盤融資維持率 + 整體市場融資融券，與個股無關，載入一次即快取
 }
 function setStatus(mode,extra){
   const dot=document.getElementById('statusDot'),tx=document.getElementById('statusTxt'),lbl=document.getElementById('priceLbl');
@@ -714,7 +772,7 @@ function updateHeader(id,name){
 /* ---------- render orchestrator ---------- */
 function renderAll(){
   if(!PRICE.length)return;
-  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawAAII,renderAdvice]
+  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawAAII,renderStockMargin,drawMarketMargin,renderAdvice]
     .forEach(fn=>{try{fn();}catch(e){console.error(fn.name,e);}});
   requestAnimationFrame(()=>Object.values(charts).forEach(c=>c&&c.resize()));
 }
@@ -771,7 +829,7 @@ function renderMACD(){
   metaChip('macdMeta',o>=0?'up':'down',(o>=0?'紅棒 ':'綠棒 ')+o.toFixed(2));
 }
 /* ---------- 大盤環境：VIXTWN / 加權指數 / 台美匯率（三堆疊，各自刻度）---------- */
-let MACRO=null, MACRO_LOADING=false, AAII=null;
+let MACRO=null, MACRO_LOADING=false, AAII=null, MKT=null, MKT_LOADING=false;
 async function yGet(sym,range){
   try{
     const r=await fetch(`/api/yahoo?symbol=${encodeURIComponent(sym)}&range=${range}&interval=1d`);
@@ -1119,6 +1177,117 @@ function drawAAII(){
       {name:'中立',type:'bar',stack:'s',data:d.map(x=>x.neutral),itemStyle:{color:N}},
       {name:'看空',type:'bar',stack:'s',data:d.map(x=>x.bear),itemStyle:{color:R}}
     ]},true);
+}
+
+/* ---------- 融資融券與維持率 ---------- */
+function maintLabel(v){ if(v==null||!isFinite(v))return['—','']; if(v>=150)return['安全','safe']; if(v>=130)return['留意','warn']; return['追繳風險','danger']; }
+function estimateMarketMaint(points){
+  if(!points.length)return[]; let est=167; const out=[];
+  for(let i=0;i<points.length;i++){const p=points[i];
+    if(i>0){const pr=points[i-1]; const sr=pr.bal>0?p.bal/pr.bal:1;
+      const mr=(pr.money>0&&p.money>0)?p.money/pr.money:sr;
+      est=est*(sr/mr); est=Math.max(100,Math.min(300,est));}
+    out.push({date:p.date,v:est,est:true});}
+  return out;
+}
+function computeStockMaint(){
+  if(!MARGIN.length||!PRICE.length)return[];
+  const pbd={}; PRICE.forEach(p=>pbd[p.date]=p.close);
+  const sorted=[...MARGIN].sort((a,b)=>a.date<b.date?-1:1);
+  const LTV=0.6; let loan=null; const out=[];
+  for(const p of sorted){ const close=pbd[p.date]; if(!close||!p.margin)continue;
+    const coll=close*p.margin*1000;
+    if(loan==null)loan=coll*LTV;
+    else{ loan+=(p.buy-p.sell)*close*1000*LTV; loan-=(p.ret||0)*close*1000*0.5; const tgt=coll*LTV; loan=loan*0.65+tgt*0.35; }
+    loan=Math.max(loan,coll*0.25);
+    const m=loan>0?coll/loan*100:null;
+    out.push({date:p.date,v:m!=null?Math.max(80,Math.min(300,m)):null});
+  }
+  return out;
+}
+async function loadMarketMargin(){
+  if(MKT_LOADING)return; MKT_LOADING=true;
+  const start=daysAgo(120);
+  let points=[], maint=[], src='';
+  try{
+    const rows=await fm('TaiwanStockTotalMarginPurchaseShortSale','',start);
+    const byDate={};
+    (rows||[]).forEach(r=>{ if(!r.date||!r.name)return; (byDate[r.date]||(byDate[r.date]={}))[r.name]=r; });
+    points=Object.keys(byDate).sort().map(date=>{
+      const d=byDate[date], mp=d.MarginPurchase, money=d.MarginPurchaseMoney, ss=d.ShortSale;
+      if(!mp)return null;
+      return {date, bal:+mp.TodayBalance||0, prev:+mp.YesBalance||0, buy:+mp.buy||0, sell:+mp.sell||0,
+        money: money?(+money.TodayBalance||0):null, short: ss?(+ss.TodayBalance||0):0, shortPrev: ss?(+ss.YesBalance||0):0};
+    }).filter(Boolean);
+  }catch(e){}
+  try{
+    const mr=await fm('TaiwanTotalExchangeMarginMaintenance','',start);
+    maint=(mr||[]).map(r=>({date:r.date,v:+r.TotalExchangeMarginMaintenance})).filter(x=>isFinite(x.v)&&x.v>0);
+    if(maint.length)src='FinMind 官方';
+  }catch(e){}
+  if(!maint.length&&points.length){maint=estimateMarketMaint(points); src='估算';}
+  MKT={points, maint, src};
+  MKT_LOADING=false;
+  drawMarketMargin();
+}
+function drawMarketMargin(){
+  const card=document.getElementById('mktMaintCard'); if(!card)return; const p=pal();
+  if(!MKT||!MKT.maint||!MKT.maint.length){ document.getElementById('mktMaintSub').textContent='大盤融資維持率：FinMind 可用時顯示（需部署站或本機）'; return; }
+  const m=MKT.maint, last=m[m.length-1], prev=m.length>1?m[m.length-2]:null;
+  const [lbl,cls]=maintLabel(last.v);
+  document.getElementById('mktMaintVal').innerHTML=last.v.toFixed(2)+'<small>%</small>';
+  const pill=document.getElementById('mktMaintPill'); pill.textContent=lbl; pill.className='pill '+cls;
+  const dd=prev?last.v-prev.v:null;
+  document.getElementById('mktMaintSub').innerHTML=`${last.date} · 來源 ${MKT.src}`+(dd!=null?` · 日變化 <b style="color:${dd>=0?'#16a34a':'#dc2626'}">${dd>=0?'+':''}${dd.toFixed(2)}</b>`:'');
+  metaChip('mktMaintMeta',cls==='safe'?'up':cls==='warn'?'warn':'down',lbl);
+  const d=m.slice(-60); const c=mk('chart-mktmaint');
+  if(c)c.setOption({animation:false,
+    tooltip:{trigger:'axis',backgroundColor:p.panel,borderColor:p.border,borderWidth:1,textStyle:{color:p.ink,fontSize:11},valueFormatter:v=>(+v).toFixed(2)+'%'},
+    grid:{left:42,right:10,top:10,bottom:20},
+    xAxis:{type:'category',data:d.map(x=>x.date.slice(5)),axisLabel:{color:p.muted,fontSize:9,interval:Math.ceil(d.length/6)},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}},
+    yAxis:{type:'value',scale:true,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9},axisLine:{show:false},axisTick:{show:false}},
+    series:[{type:'line',data:d.map(x=>+x.v.toFixed(2)),showSymbol:false,smooth:true,lineStyle:{width:1.8,color:p.accent},
+      markLine:{symbol:'none',silent:true,data:[{yAxis:130,lineStyle:{color:'#dc2626',type:'dashed',width:1},label:{formatter:'追繳130',color:'#dc2626',fontSize:9,position:'insideEndTop'}},{yAxis:150,lineStyle:{color:'#d97706',type:'dashed',width:1},label:{formatter:'留意150',color:'#d97706',fontSize:9,position:'insideEndBottom'}}]}}]},true);
+  drawMktTable();
+}
+function drawMktTable(){
+  const t=document.getElementById('mktMarginTable'); if(!t||!MKT||!MKT.points.length)return;
+  const mMap={}; MKT.maint.forEach(x=>mMap[x.date]=x.v);
+  const rows=MKT.points.slice(-14).reverse();
+  let html='<thead><tr><th>日期</th><th>融資餘額</th><th>日增減</th><th>融券餘額</th><th>日增減</th><th>券資比</th><th>維持率</th></tr></thead><tbody>';
+  rows.forEach(r=>{ const md=r.bal-r.prev, sd=r.short-r.shortPrev, ratio=r.bal>0?r.short/r.bal*100:null, mv=mMap[r.date];
+    html+=`<tr><td>${r.date.slice(5)}</td><td>${fmtInt(r.bal)}</td><td class="${md>=0?'up':'down'}">${md>=0?'+':''}${fmtInt(md)}</td><td>${fmtInt(r.short)}</td><td class="${sd>=0?'up':'down'}">${sd>=0?'+':''}${fmtInt(sd)}</td><td>${ratio!=null?ratio.toFixed(1)+'%':'—'}</td><td>${mv!=null?mv.toFixed(1):'—'}</td></tr>`; });
+  t.innerHTML=html+'</tbody>';
+  metaChip('mktMarginMeta','neu',`融資 ${fmtInt(MKT.points.at(-1).bal)} 張`);
+}
+function renderStockMargin(){
+  const t=document.getElementById('stockMarginTable'); if(!t)return; const p=pal();
+  if(!MARGIN.length){ document.getElementById('stMaintNote').textContent='此標的無融資融券資料'; t.innerHTML=''; document.getElementById('stMaintVal').innerHTML='—<small>%</small>'; const pl=document.getElementById('stMaintPill'); pl.textContent='—'; pl.className='pill'; metaChip('stockMaintMeta','neu','無資料'); const c0=mk('chart-stmaint'); if(c0)c0.clear(); return; }
+  const maint=computeStockMaint(), mMap={}; maint.forEach(x=>mMap[x.date]=x.v);
+  const last=maint.length?maint[maint.length-1]:null;
+  const [lbl,cls]=maintLabel(last?last.v:null);
+  document.getElementById('stMaintVal').innerHTML=(last&&last.v!=null?last.v.toFixed(1):'—')+'<small>%</small>';
+  const pill=document.getElementById('stMaintPill'); pill.textContent=lbl; pill.className='pill '+cls;
+  metaChip('stockMaintMeta',cls==='safe'?'up':cls==='warn'?'warn':'down',`維持率 ${last&&last.v!=null?last.v.toFixed(0)+'%':'—'}`);
+  const sorted=[...MARGIN].sort((a,b)=>a.date<b.date?-1:1);
+  const latM=sorted.at(-1), d5=sorted.length>5?sorted.at(-6):sorted[0], d20=sorted.length>20?sorted.at(-21):sorted[0];
+  const c5=latM.margin-d5.margin, c20=latM.margin-d20.margin;
+  const trend=(c5>0&&c20>0)?'融資增溫、槓桿偏多':(c5<0&&c20<0)?'融資降溫、槓桿去化':'融資方向拉鋸';
+  const risk=last&&last.v!=null?(last.v<130?'已逼近追繳線(130%)，高槓桿風險，慎防斷頭賣壓。':last.v<150?'維持率偏低，留意追繳風險。':'維持率安全。'):'';
+  document.getElementById('stMaintNote').innerHTML=`${trend}。融資近5日 <b>${c5>=0?'+':''}${fmtInt(c5)}</b> 張、近20日 <b>${c20>=0?'+':''}${fmtInt(c20)}</b> 張。${risk}<br><span style="color:var(--muted)">※ 維持率為以收盤價與融資流量之估算（LTV 0.6），非券商整戶實際值，僅供趨勢參考。</span>`;
+  const dd=maint.slice(-60); const c=mk('chart-stmaint');
+  if(c&&dd.length)c.setOption({animation:false,
+    tooltip:{trigger:'axis',backgroundColor:p.panel,borderColor:p.border,borderWidth:1,textStyle:{color:p.ink,fontSize:11},valueFormatter:v=>v==null?'—':(+v).toFixed(1)+'%'},
+    grid:{left:42,right:12,top:14,bottom:22},
+    xAxis:{type:'category',data:dd.map(x=>x.date.slice(5)),axisLabel:{color:p.muted,fontSize:9,interval:Math.ceil(dd.length/8)},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}},
+    yAxis:{type:'value',scale:true,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9},axisLine:{show:false},axisTick:{show:false}},
+    series:[{type:'line',data:dd.map(x=>x.v!=null?+x.v.toFixed(1):null),showSymbol:false,smooth:true,connectNulls:true,lineStyle:{width:1.8,color:'#d97706'},
+      markLine:{symbol:'none',silent:true,data:[{yAxis:130,lineStyle:{color:'#dc2626',type:'dashed',width:1},label:{formatter:'追繳130',color:'#dc2626',fontSize:9}}]}}]},true);
+  const rows=sorted.slice(-14).reverse();
+  let html='<thead><tr><th>日期</th><th>融資餘額</th><th>日增減</th><th>融券餘額</th><th>券資比</th><th>維持率估</th></tr></thead><tbody>';
+  rows.forEach(r=>{ const md=(r.marginPrev!=null)?r.margin-r.marginPrev:null, ratio=r.margin>0?r.shortB/r.margin*100:null, mv=mMap[r.date];
+    html+=`<tr><td>${r.date.slice(5)}</td><td>${fmtInt(r.margin)}</td><td class="${md>=0?'up':'down'}">${md!=null?(md>=0?'+':'')+fmtInt(md):'—'}</td><td>${fmtInt(r.shortB)}</td><td>${ratio!=null?ratio.toFixed(1)+'%':'—'}</td><td>${mv!=null?mv.toFixed(1):'—'}</td></tr>`; });
+  t.innerHTML=html+'</tbody>';
 }
 
 /* ---------- settings ---------- */
