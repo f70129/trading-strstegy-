@@ -1,0 +1,33 @@
+name: Update CBOE put/call ratio
+
+on:
+  schedule:
+    # US options data posts after the close; run Tue-Sat 00:30 UTC (covers Mon-Fri sessions)
+    - cron: "30 0 * * 2-6"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet requests
+      - name: Fetch CBOE equity put/call ratio
+        run: python scripts/fetch_pcc.py
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pcc.json
+          if git diff --staged --quiet; then
+            echo "No change in put/call data."
+          else
+            git commit -m "chore: update CBOE put/call ratio"
+            git push
+          fi
