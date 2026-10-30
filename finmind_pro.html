@@ -182,6 +182,9 @@ main{padding:14px;max-width:1680px;margin:0 auto}
 .pill.sm{font-size:10.5px;padding:1px 7px}
 .maint-sub{font-size:11.5px;color:var(--muted);margin-top:6px}
 .mtable-wrap{max-height:300px;overflow:auto}
+.rbtn{font-size:10.5px;padding:2px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-2);color:var(--muted);margin-left:4px;cursor:pointer}
+.rbtn.on{background:var(--accent);color:#fff;border-color:transparent}
+.rbtn:hover{color:var(--ink)}
 .mtable{width:100%;border-collapse:collapse;font-size:12px}
 .mtable th{text-align:right;color:var(--muted);font-weight:600;font-size:10.5px;letter-spacing:.02em;padding:6px 8px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel);white-space:nowrap}
 .mtable th:first-child,.mtable td:first-child{text-align:left}
@@ -413,7 +416,9 @@ footer b{color:var(--ink-2)}
 
     <!-- 台股整體市場融資融券表 -->
     <section class="card col-8" id="mktMarginCard">
-      <div class="hd"><span class="t">台股整體市場融資融券</span><span class="s">上市+上櫃合計 · 單位：張</span><div class="meta" id="mktMarginMeta"></div></div>
+      <div class="hd"><span class="t">台股整體市場融資融券</span><span class="s">上市+上櫃合計 · 金額＝億元</span>
+        <div class="meta"><span id="mktRangeBtns"><button class="rbtn on" onclick="setMktRange(20,this)">近月</button><button class="rbtn" onclick="setMktRange(60,this)">近3月</button><button class="rbtn" onclick="setMktRange(130,this)">近半年</button><button class="rbtn" onclick="setMktRange(260,this)">近1年</button></span><span id="mktMarginMeta"></span></div>
+      </div>
       <div class="body"><div class="mtable-wrap"><table class="mtable" id="mktMarginTable"></table></div></div>
     </section>
 
@@ -894,7 +899,7 @@ function renderMACD(){
   metaChip('macdMeta',o>=0?'up':'down',(o>=0?'紅棒 ':'綠棒 ')+o.toFixed(2));
 }
 /* ---------- 大盤環境：VIXTWN / 加權指數 / 台美匯率（三堆疊，各自刻度）---------- */
-let MACRO=null, MACRO_LOADING=false, AAII=null, MKT=null, MKT_LOADING=false, FINRA=null, PCC=null;
+let MACRO=null, MACRO_LOADING=false, AAII=null, MKT=null, MKT_LOADING=false, FINRA=null, PCC=null, mktRows=20;
 async function yGet(sym,range){
   try{
     const r=await fetch(`/api/yahoo?symbol=${encodeURIComponent(sym)}&range=${range}&interval=1d`);
@@ -1273,17 +1278,19 @@ function computeStockMaint(){
 }
 async function loadMarketMargin(){
   if(MKT_LOADING)return; MKT_LOADING=true;
-  const start=daysAgo(120);
+  const start=daysAgo(400); // 一年份
   let points=[], maint=[], src='';
   try{
     const rows=await fm('TaiwanStockTotalMarginPurchaseShortSale','',start);
     const byDate={};
     (rows||[]).forEach(r=>{ if(!r.date||!r.name)return; (byDate[r.date]||(byDate[r.date]={}))[r.name]=r; });
     points=Object.keys(byDate).sort().map(date=>{
-      const d=byDate[date], mp=d.MarginPurchase, money=d.MarginPurchaseMoney, ss=d.ShortSale;
+      const d=byDate[date], mp=d.MarginPurchase, money=d.MarginPurchaseMoney, ss=d.ShortSale, sm=d.ShortSaleMoney;
       if(!mp)return null;
       return {date, bal:+mp.TodayBalance||0, prev:+mp.YesBalance||0, buy:+mp.buy||0, sell:+mp.sell||0,
-        money: money?(+money.TodayBalance||0):null, short: ss?(+ss.TodayBalance||0):0, shortPrev: ss?(+ss.YesBalance||0):0};
+        money: money?(+money.TodayBalance||0):null, moneyPrev: money?(+money.YesBalance||0):null,
+        short: ss?(+ss.TodayBalance||0):0, shortPrev: ss?(+ss.YesBalance||0):0,
+        shortMoney: sm?(+sm.TodayBalance||0):null};
     }).filter(Boolean);
   }catch(e){}
   try{
@@ -1320,13 +1327,17 @@ function drawMarketMargin(){
 function drawMktTable(){
   const t=document.getElementById('mktMarginTable'); if(!t||!MKT||!MKT.points.length)return;
   const mMap={}; MKT.maint.forEach(x=>mMap[x.date]=x.v);
-  const rows=MKT.points.slice(-14).reverse();
-  let html='<thead><tr><th>日期</th><th>融資餘額</th><th>日增減</th><th>融券餘額</th><th>日增減</th><th>券資比</th><th>維持率</th></tr></thead><tbody>';
-  rows.forEach(r=>{ const md=r.bal-r.prev, sd=r.short-r.shortPrev, ratio=r.bal>0?r.short/r.bal*100:null, mv=mMap[r.date];
-    html+=`<tr><td>${r.date.slice(5)}</td><td>${fmtInt(r.bal)}</td><td class="${md>=0?'up':'down'}">${md>=0?'+':''}${fmtInt(md)}</td><td>${fmtInt(r.short)}</td><td class="${sd>=0?'up':'down'}">${sd>=0?'+':''}${fmtInt(sd)}</td><td>${ratio!=null?ratio.toFixed(1)+'%':'—'}</td><td>${mv!=null?mv.toFixed(1):'—'}</td></tr>`; });
+  const yi=v=>v==null?'—':(v/1e8).toLocaleString('en-US',{maximumFractionDigits:0});
+  const all=MKT.points, rows=all.slice(-mktRows).reverse();
+  let html='<thead><tr><th>日期</th><th>融資餘額(張)</th><th>融資金額(億)</th><th>日增(億)</th><th>融券餘額(張)</th><th>融券金額(億)</th><th>券資比</th><th>維持率</th></tr></thead><tbody>';
+  rows.forEach(r=>{ const sd=r.short-r.shortPrev, ratio=r.bal>0?r.short/r.bal*100:null, mv=mMap[r.date];
+    const mDelta=(r.money!=null&&r.moneyPrev!=null)?(r.money-r.moneyPrev):null;
+    html+=`<tr><td>${r.date.slice(5)}</td><td>${fmtInt(r.bal)}</td><td>${yi(r.money)}</td><td class="${mDelta>=0?'up':'down'}">${mDelta!=null?(mDelta>=0?'+':'')+(mDelta/1e8).toFixed(1):'—'}</td><td>${fmtInt(r.short)}</td><td>${yi(r.shortMoney)}</td><td>${ratio!=null?ratio.toFixed(1)+'%':'—'}</td><td>${mv!=null?mv.toFixed(1):'—'}</td></tr>`; });
   t.innerHTML=html+'</tbody>';
-  metaChip('mktMarginMeta','neu',`融資 ${fmtInt(MKT.points.at(-1).bal)} 張`);
+  const latest=MKT.points.at(-1);
+  metaChip('mktMarginMeta','neu',`融資 ${latest.money!=null?yi(latest.money)+' 億':fmtInt(latest.bal)+' 張'}`);
 }
+function setMktRange(n,el){ mktRows=n; try{drawMktTable();}catch(e){} document.querySelectorAll('#mktRangeBtns .rbtn').forEach(b=>b.classList.remove('on')); if(el)el.classList.add('on'); }
 function renderStockMargin(){
   const t=document.getElementById('stockMarginTable'); if(!t)return; const p=pal();
   if(!MARGIN.length){ document.getElementById('stMaintNote').textContent='此標的無融資融券資料'; t.innerHTML=''; document.getElementById('stMaintVal').innerHTML='—<small>%</small>'; const pl=document.getElementById('stMaintPill'); pl.textContent='—'; pl.className='pill'; metaChip('stockMaintMeta','neu','無資料'); const c0=mk('chart-stmaint'); if(c0)c0.clear(); return; }
