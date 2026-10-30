@@ -1,14 +1,8 @@
 {
   "source": "AAII Investor Sentiment Survey (https://www.aaii.com/sentimentsurvey)",
-  "updated": "2026-10-23",
+  "updated": "2026-10-30",
   "count": 104,
   "data": [
-    {
-      "week": "2024-10-31",
-      "bull": 39.5,
-      "neutral": 29.6,
-      "bear": 30.9
-    },
     {
       "week": "2024-11-07",
       "bull": 41.5,
@@ -626,6 +620,12 @@
       "bull": 36.9,
       "neutral": 17.3,
       "bear": 45.8
+    },
+    {
+      "week": "2026-10-29",
+      "bull": 37.8,
+      "neutral": 20.7,
+      "bear": 41.4
     }
   ]
 }
