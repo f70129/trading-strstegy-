@@ -208,9 +208,10 @@ main{padding:14px;max-width:1680px;margin:0 auto}
 .mini-title{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:2px}
 .pcc-alert{padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600;line-height:1.5;margin-bottom:14px}
 /* risk overview */
-.risk-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
-@media(max-width:900px){.risk-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:480px){.risk-grid{grid-template-columns:1fr}}
+.risk-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+@media(max-width:1100px){.risk-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:640px){.risk-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:420px){.risk-grid{grid-template-columns:1fr}}
 .rtile{background:var(--panel-2);border:1px solid var(--border);border-left:3px solid var(--border);border-radius:11px;padding:10px 12px;display:flex;flex-direction:column;gap:3px;min-width:0}
 .rtile .rn{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rtile .rv{font-family:var(--font-mono);font-size:21px;font-weight:700;line-height:1.1}
@@ -1514,6 +1515,14 @@ function drawRiskOverview(){
   const pp=pccPct();
   if(pp!=null){const lv=PCC.data[PCC.data.length-1].pc; tiles.push({n:'CBOE Put/Call',v:lv.toFixed(2),cat:pp>=85?'opportunity':pp<=15?'caution':'neutral',s:pp>=85?'恐慌·買點':pp<=15?'過度樂觀·警示':'中性('+pp.toFixed(0)+'%)'});}
   else tiles.push({n:'CBOE Put/Call',v:'—',cat:'na',s:'載入中'});
+  // 櫃買指數（盤中/當日）：極端殺盤=反轉機會、中等急跌=去槓桿風險
+  let otcPct=null, otcLive=false;
+  if(OTC&&OTC.idx&&OTC.idx.length){
+    if(OTC.live){otcPct=OTC.live.pct;otcLive=true;}
+    else{const a=OTC.idx,l=a[a.length-1],pr=a[a.length-2]; if(l&&pr)otcPct=(l.close-pr.close)/pr.close*100;}
+  }
+  if(otcPct!=null) tiles.push({n:'櫃買'+(otcLive?'(盤中)':''),v:(otcPct>=0?'+':'')+otcPct.toFixed(1)+'%',cat:otcPct<=-4?'opportunity':otcPct<=-1.5?'caution':otcPct<=-0.8?'neutral':'calm',s:otcPct<=-4?'極端殺盤·反轉':otcPct<=-1.5?'急跌·去槓桿':otcPct<=-0.8?'走弱':'平穩'});
+  else tiles.push({n:'櫃買指數',v:'—',cat:'na',s:'載入中'});
 
   document.getElementById('riskTiles').innerHTML=tiles.map(t=>`<div class="rtile" style="border-left-color:${COL[t.cat]}"><span class="rn">${t.n}</span><span class="rv">${t.v}</span><span class="rs" style="color:${TXT[t.cat]}">${t.s}</span></div>`).join('');
 
@@ -1548,13 +1557,13 @@ async function loadOTC(){
     try{ const r=await fetch(`/api/twse?id=o00&ex=${ex}`); if(!r.ok)continue; const j=await r.json(); const m=j.msgArray&&j.msgArray[0]; if(!m)continue;
       const z=num(m.z),y=num(m.y); if(z!=null&&y!=null&&y>0){ live={level:z,prev:y,pct:(z-y)/y*100,time:m.t||''}; break; } }catch(e){}
   }
-  OTC={idx, live}; OTC_LOADING=false; drawOTC();
+  OTC={idx, live}; OTC_LOADING=false; drawOTC(); try{drawRiskOverview();}catch(e){}
 }
 async function refreshOTCLive(){
   if(!OTC)return;
   for(const ex of ['otc','tse']){
     try{ const r=await fetch(`/api/twse?id=o00&ex=${ex}`); if(!r.ok)continue; const j=await r.json(); const m=j.msgArray&&j.msgArray[0]; if(!m)continue;
-      const z=num(m.z),y=num(m.y); if(z!=null&&y!=null&&y>0){ OTC.live={level:z,prev:y,pct:(z-y)/y*100,time:m.t||''}; try{drawOTC();}catch(e){} return; } }catch(e){}
+      const z=num(m.z),y=num(m.y); if(z!=null&&y!=null&&y>0){ OTC.live={level:z,prev:y,pct:(z-y)/y*100,time:m.t||''}; try{drawOTC();}catch(e){} try{drawRiskOverview();}catch(e){} return; } }catch(e){}
   }
 }
 function drawOTC(){
