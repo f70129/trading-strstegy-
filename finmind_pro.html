@@ -1575,16 +1575,17 @@ function drawOTC(){
     const mv=document.getElementById('otcMarginVal'); mv.innerHTML=`${dBal>=0?'+':''}${fmtInt(dBal)} 張`+(dMoney!=null?` ／ ${dMoney>=0?'+':''}${dMoney.toFixed(1)} 億`:''); mv.style.color=dBal<0?DN:UP;
     document.getElementById('otcMarginSub').textContent=`${m.date.slice(5)} 收盤公布`;
   } else { document.getElementById('otcMarginVal').textContent='融資資料載入中'; }
-  // 警示
+  // 警示（分級：中等急跌=延續風險；極端殺盤=融資斷頭洗盤→常為反轉點）
   let cls,txt; const mode=live?'盤中':'當日';
-  if(pct!=null&&pct<=-1.5){cls='danger';txt=`🔴 櫃買${mode}急跌 ${pct.toFixed(2)}%——此類大跌日盤後常見大量融資減碼（中小型股斷頭／停損賣壓），留意去槓桿賣壓與連鎖下殺。`;}
+  if(pct!=null&&pct<=-4){cls='safe';txt=`🟢 櫃買${mode}極端急殺 ${pct.toFixed(2)}%——融資恐遭大量斷頭、浮額洗清。歷史上此類恐慌殺盤常是短線反轉／反彈點，可留意止跌訊號分批低接（非買進訊號，須見價穩量縮）。`;}
+  else if(pct!=null&&pct<=-1.5){cls='danger';txt=`🔴 櫃買${mode}急跌 ${pct.toFixed(2)}%——盤後常見融資減碼（斷頭／停損），留意連鎖去槓桿賣壓；跌勢未止前不宜搶接。`;}
   else if(pct!=null&&pct<=-0.8){cls='warn';txt=`🟠 櫃買${mode}走弱 ${pct.toFixed(2)}%，觀察是否觸發盤後融資減碼。`;}
   else if(pct!=null&&pct>=1.0){cls='warn';txt=`⚪ 櫃買${mode}反彈 +${pct.toFixed(2)}%，融資去槓桿壓力暫緩。`;}
   else {cls='warn';txt=`⚪ 櫃買${mode}波動不大（${pct!=null?(pct>=0?'+':'')+pct.toFixed(2)+'%':'—'}）。`;}
   const al=document.getElementById('otcAlert'); al.style.display='block'; al.textContent=txt;
   const col={safe:'#16a34a',warn:'#d97706',danger:'#dc2626'}[cls], bg={safe:'rgba(22,163,74,.12)',warn:'rgba(217,119,6,.12)',danger:'rgba(220,38,38,.12)'}[cls];
   al.style.background=bg; al.style.color=col; al.style.border='1px solid '+col+'55';
-  metaChip('otcMeta',cls==='danger'?'down':'warn',(live?'盤中 ':'')+(pct!=null?(pct>=0?'+':'')+pct.toFixed(2)+'%':'—'));
+  metaChip('otcMeta',pct!=null&&pct<0?'down':'up',(live?'盤中 ':'')+(pct!=null?(pct>=0?'+':'')+pct.toFixed(2)+'%':'—'));
   // 關聯統計
   let note='';
   if(MKT&&MKT.points&&MKT.points.length){
@@ -1595,6 +1596,14 @@ function drawOTC(){
     const win=all.slice(-120);
     if(win.length>10){ const xs=win.map(a=>a[0]),ys=win.map(a=>a[1]),mx=xs.reduce((a,b)=>a+b)/xs.length,my=ys.reduce((a,b)=>a+b)/ys.length; let cov=0,vx=0,vy=0; for(let i=0;i<xs.length;i++){cov+=(xs[i]-mx)*(ys[i]-my);vx+=(xs[i]-mx)**2;vy+=(ys[i]-my)**2;} const rho=(vx>0&&vy>0)?cov/Math.sqrt(vx*vy):0; note+=` 近120日「櫃買日報酬 vs 融資日變化」相關係數 ρ=<b>${rho.toFixed(2)}</b>（正值＝同向：指數跌、融資減）。`; }
   }
+  // 反轉驗證：大跌日之後 5 日平均報酬（極端殺盤是否偏反轉）
+  const ex=[], mid=[];
+  for(let i=1;i<idx.length-5;i++){ const ret=(idx[i].close-idx[i-1].close)/idx[i-1].close*100, f5=(idx[i+5].close-idx[i].close)/idx[i].close*100;
+    if(ret<=-4)ex.push(f5); else if(ret<=-1.5)mid.push(f5); }
+  const avgf=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:null;
+  if(ex.length){ const a=avgf(ex); note+=`<br><b style="color:${a>=0?UP:DN}">反轉驗證：極端殺盤（單日≤−4%）近一年共 ${ex.length} 次，其後5日平均 ${a>=0?'+':''}${a.toFixed(1)}%</b>（${a>1?'確實偏反轉／反彈，與你的觀察一致':a>=0?'略偏反彈':'反彈不明顯，仍需留意'}）。`; }
+  else { note+='<br>反轉驗證：近一年尚無單日≤−4% 的極端殺盤樣本可統計。'; }
+  if(mid.length){ const a=avgf(mid); note+=` 對照：一般急跌（−1.5~−4%）共 ${mid.length} 次，其後5日平均 ${a>=0?'+':''}${a.toFixed(1)}%（反彈力道通常弱於極端殺盤）。`; }
   note+=' <span style="color:var(--muted)">※ 盤中無官方融資餘額（盤後約21:00才公布）；本面板用櫃買盤中跌幅作「可能觸發盤後融資減碼」的領先警示，並以歷史日資料驗證關聯。僅供參考，非投資建議。</span>';
   document.getElementById('otcNote').innerHTML=note;
   // 圖：上=櫃買指數，下=市場融資餘額(張)，共用時間軸
