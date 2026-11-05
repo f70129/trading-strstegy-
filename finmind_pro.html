@@ -381,9 +381,11 @@ footer b{color:var(--ink-2)}
       <div class="body"><div id="chart-macro" class="echart" style="height:300px"></div></div>
     </section>
 
-    <!-- 大戶持股變化 800~1000張 (集保分散表) -->
+    <!-- 大戶持股變化 (集保分散表) -->
     <section class="card col-12" id="holdersCard">
-      <div class="hd"><span class="t">大戶持股變化 · 800~1000張</span><span class="s">集保戶股權分散表（每週） · 大戶占比 vs 股價</span><div class="meta" id="holdersMeta"></div></div>
+      <div class="hd"><span class="t">大戶持股變化</span><span class="s">集保戶股權分散表（每週） · 大戶占比 vs 股價</span>
+        <div class="meta"><span id="holderLvBtns"><button class="rbtn" onclick="setHolderLevel('400',this)">400~600張</button><button class="rbtn" onclick="setHolderLevel('600',this)">600~800張</button><button class="rbtn on" onclick="setHolderLevel('800',this)">800~1000張</button><button class="rbtn" onclick="setHolderLevel('1000',this)">1000張↑</button></span><span id="holdersMeta"></span></div>
+      </div>
       <div class="body">
         <div class="mg-note" id="holdersStat" style="margin-top:0;margin-bottom:10px">載入中…</div>
         <div id="chart-holders" class="echart" style="height:260px"></div>
@@ -1185,6 +1187,9 @@ function renderAdvice(){
     if(f5>0)pos.push('外資5日買超'); if(f5<0)neg.push('外資5日賣超'); if(t5>0)pos.push('投信站買方');}
   if(MARGIN.length>=6){const base=MARGIN.at(-6).margin||1,mc=MARGIN.at(-1).margin-MARGIN.at(-6).margin;
     if(mc/base>0.03)neg.push('融資大增(散戶追高)'); else if(mc<0)pos.push('融資減少(浮額清洗)');}
+  // 大戶籌碼（集保分散表，選定級距的月增減持）
+  if(typeof HOLDERS!=='undefined'&&HOLDERS&&HOLDERS.rows){ const hc=holderMonthChg(holderLevel), lab=HLV[holderLevel].label;
+    if(hc!=null){ if(hc>0.15)pos.push('大戶月增持('+lab+')'); else if(hc<-0.15)neg.push('大戶月減持('+lab+')'); } }
   // 大盤環境
   let macroNote='大盤環境資料載入中…';
   if(MACRO){
@@ -1641,27 +1646,36 @@ function drawOTC(){
             {name:'市場融資餘額',type:'line',xAxisIndex:1,yAxisIndex:1,data:dates.map(d=>d in mktMap?mktMap[d]:null),showSymbol:false,smooth:true,connectNulls:true,lineStyle:{width:1.8,color:'#d97706'},areaStyle:{color:'rgba(217,119,6,.08)'}}]},true);
 }
 
-/* ---------- 大戶持股變化 800~1000張（集保戶股權分散表，per-stock）---------- */
-let HOLDERS=null;
+/* ---------- 大戶持股變化（集保戶股權分散表，per-stock，可切換級距）---------- */
+let HOLDERS=null, holderLevel='800';
+const HLV={ '400':{label:'400~600張',pfx:'400001-600000'}, '600':{label:'600~800張',pfx:'600001-800000'}, '800':{label:'800~1000張',pfx:'800001-1000000'}, '1000':{label:'1000張以上',pfx:'1000001'} };
+function holderSeries(key){
+  if(!HOLDERS||!HOLDERS.rows)return [];
+  const pfx=HLV[key].pfx, out=[];
+  HOLDERS.rows.forEach(r=>{ const s=String(r.HoldingSharesLevel||'').replace(/[,\s]/g,''); if(s.indexOf(pfx)===0){ const pct=+r.percent,people=+r.people; if(isFinite(pct))out.push({date:r.date,pct,people}); } });
+  return out.sort((a,b)=>a.date<b.date?-1:1);
+}
+function holderMonthChg(key){ const s=holderSeries(key); if(s.length<=4)return null; return s[s.length-1].pct - s[s.length-5].pct; }
 async function loadHolders(id){
   let rows=[];
   try{ rows=await fm('TaiwanStockHoldingSharesPer',id,daysAgo(400)); }catch(e){}
-  const d=(rows||[]).filter(r=>{const s=String(r.HoldingSharesLevel||'').replace(/[,\s]/g,'');return s.indexOf('800001-1000000')===0;})
-    .map(r=>({date:r.date, pct:+r.percent, people:+r.people})).filter(x=>isFinite(x.pct)).sort((a,b)=>a.date<b.date?-1:1);
-  HOLDERS={id, data:d};
+  HOLDERS={id, rows:rows||[]};
   try{drawHolders();}catch(e){}
+  try{renderAdvice();}catch(e){}
 }
+function setHolderLevel(key,el){ holderLevel=key; try{drawHolders();}catch(e){} try{renderAdvice();}catch(e){}
+  document.querySelectorAll('#holderLvBtns .rbtn').forEach(b=>b.classList.remove('on')); if(el)el.classList.add('on'); }
 function drawHolders(){
   const card=document.getElementById('holdersCard'); if(!card)return; const p=pal();
   if(!HOLDERS){ metaChip('holdersMeta','neu','載入中'); return; }
-  const d=HOLDERS.data||[];
-  if(!d.length){ metaChip('holdersMeta','neu','無資料'); document.getElementById('holdersStat').textContent='此標的查無集保股權分散表資料。'; const c0=mk('chart-holders'); if(c0)c0.clear(); return; }
+  const d=holderSeries(holderLevel), lab=HLV[holderLevel].label;
+  if(!d.length){ metaChip('holdersMeta','neu','無資料'); document.getElementById('holdersStat').textContent=`此標的查無 ${lab} 集保股權分散資料。`; const c0=mk('chart-holders'); if(c0)c0.clear(); return; }
   const UP='#dc2626',DN='#16a34a';
   const last=d.at(-1), prev=d.length>1?d.at(-2):null, chg=prev?last.pct-prev.pct:null;
   const d4=d.length>4?d.at(-5):d[0], chg4=last.pct-d4.pct;
   const trend = chg4>0.15?'近月大戶增持（籌碼趨集中，偏多）':chg4<-0.15?'近月大戶減持（籌碼鬆動，偏空）':'近月大戶持股變化不大';
-  document.getElementById('holdersStat').innerHTML=`最新 ${last.date} · 800~1000張持股占比 <b>${last.pct.toFixed(2)}%</b>（週變化 <b style="color:${chg>=0?UP:DN}">${chg!=null?(chg>=0?'+':'')+chg.toFixed(2)+'%':'—'}</b>、月變化 <b style="color:${chg4>=0?UP:DN}">${chg4>=0?'+':''}${chg4.toFixed(2)}%</b>） · 持有人數 ${fmtInt(last.people)} 人。${trend}。 <span style="color:var(--muted)">※ 集保每週五更新；大戶占比上升＝籌碼趨集中。</span>`;
-  metaChip('holdersMeta', chg4>0?'up':chg4<0?'down':'neu', `占比 ${last.pct.toFixed(2)}%`);
+  document.getElementById('holdersStat').innerHTML=`<b>${lab}</b> · 最新 ${last.date} 持股占比 <b>${last.pct.toFixed(2)}%</b>（週變化 <b style="color:${chg>=0?UP:DN}">${chg!=null?(chg>=0?'+':'')+chg.toFixed(2)+'%':'—'}</b>、月變化 <b style="color:${chg4>=0?UP:DN}">${chg4>=0?'+':''}${chg4.toFixed(2)}%</b>） · 持有人數 ${fmtInt(last.people)} 人。${trend}。 <span style="color:var(--muted)">※ 集保每週五更新；大戶占比上升＝籌碼趨集中。</span>`;
+  metaChip('holdersMeta', chg4>0?'up':chg4<0?'down':'neu', `${lab} ${last.pct.toFixed(2)}%`);
   const base=d.slice(-70), dates=base.map(x=>x.date);
   const priceAt=dt=>{let best=null;for(const px of PRICE){if(px.date<=dt)best=px.close;else break;}return best;};
   const prices=dates.map(priceAt);
@@ -1672,9 +1686,9 @@ function drawHolders(){
     grid:[{left:54,right:18,top:'9%',height:'37%'},{left:54,right:18,top:'60%',height:'33%'}],
     xAxis:[{type:'category',gridIndex:0,data:dates.map(x=>x.slice(5)),boundaryGap:false,axisLabel:{show:false},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}},
            {type:'category',gridIndex:1,data:dates.map(x=>x.slice(5)),boundaryGap:false,axisLabel:{color:p.muted,fontSize:9,interval:Math.ceil(dates.length/8)},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}}],
-    yAxis:[{type:'value',gridIndex:0,scale:true,name:'大戶占比%',nameTextStyle:{color:'#a78bfa',fontSize:10,fontWeight:600,align:'left'},nameGap:6,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9,formatter:'{value}%'},axisLine:{show:false},axisTick:{show:false}},
+    yAxis:[{type:'value',gridIndex:0,scale:true,name:lab+'占比%',nameTextStyle:{color:'#a78bfa',fontSize:10,fontWeight:600,align:'left'},nameGap:6,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9,formatter:'{value}%'},axisLine:{show:false},axisTick:{show:false}},
            {type:'value',gridIndex:1,scale:true,name:'收盤價',nameTextStyle:{color:p.accent,fontSize:10,fontWeight:600,align:'left'},nameGap:6,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9},axisLine:{show:false},axisTick:{show:false}}],
-    series:[{name:'大戶占比%',type:'line',xAxisIndex:0,yAxisIndex:0,data:base.map(x=>+x.pct.toFixed(2)),showSymbol:false,smooth:true,areaStyle:{color:'rgba(167,139,250,.12)'},lineStyle:{width:1.8,color:'#a78bfa'}},
+    series:[{name:lab+'占比%',type:'line',xAxisIndex:0,yAxisIndex:0,data:base.map(x=>+x.pct.toFixed(2)),showSymbol:false,smooth:true,areaStyle:{color:'rgba(167,139,250,.12)'},lineStyle:{width:1.8,color:'#a78bfa'}},
             {name:'收盤價',type:'line',xAxisIndex:1,yAxisIndex:1,data:prices,showSymbol:false,smooth:true,connectNulls:true,lineStyle:{width:1.6,color:p.accent}}]},true);
 }
 
