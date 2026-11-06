@@ -778,6 +778,7 @@ function scheduleRealtime(id){
     const rt=await fetchRealtime(id);
     if(rt&&mergeRealtime(rt)){setStatus('live-rt',rt.time+(rt.src?' · '+rt.src:''));updateHeader(id,currentName);renderAll();}
     refreshOTCLive(); // 盤中同步刷新櫃買指數即時
+    refreshMacroLive(); // 盤中同步刷新大盤環境（加權指數／匯率）即時
   },20000);
 }
 
@@ -984,6 +985,29 @@ async function loadMacro(){
   drawMacro();
   try{renderAdvice();}catch(e){}
   try{drawRiskOverview();}catch(e){}
+  refreshMacroLive(); // 盤中即時覆蓋今日的加權指數與匯率
+}
+// 盤中即時：加權指數(TWSE MIS t00)與台美匯率(Yahoo TWD=X)覆蓋/補上今日點；VIXTWN 無即時源維持日更
+function macroUpsert(dateStr, vals){
+  if(!MACRO)return; let i=MACRO.dates.indexOf(dateStr);
+  if(i<0){ MACRO.dates.push(dateStr); MACRO.sV.push(null); MACRO.sT.push(null); MACRO.sX.push(null); i=MACRO.dates.length-1; }
+  if(vals.taiex!=null)MACRO.sT[i]=vals.taiex;
+  if(vals.fx!=null)MACRO.sX[i]=vals.fx;
+}
+async function yahooLive(sym){
+  try{ const r=await fetch(`/api/yahoo?symbol=${encodeURIComponent(sym)}&range=1d&interval=5m`); if(!r.ok)return null; const j=await r.json();
+    const mp=j&&j.chart&&j.chart.result&&j.chart.result[0]&&j.chart.result[0].meta&&j.chart.result[0].meta.regularMarketPrice; return (mp>0)?+mp:null; }catch(e){return null;}
+}
+async function refreshMacroLive(){
+  if(!MACRO)return;
+  const today=taipeiDateStr();
+  let taiex=null;
+  try{ const r=await fetch('/api/twse?id=t00&ex=tse'); if(r.ok){const j=await r.json(); const m=j.msgArray&&j.msgArray[0]; const z=m?num(m.z):null; if(z!=null&&z>0)taiex=z;} }catch(e){}
+  if(taiex==null)taiex=await yahooLive('^TWII');
+  const fx=await yahooLive('TWD=X');
+  if(taiex!=null||fx!=null){ macroUpsert(today,{taiex,fx}); try{drawMacro();}catch(e){} try{drawRiskOverview();}catch(e){}
+    const liveBits=[]; if(taiex!=null)liveBits.push('加權'); if(fx!=null)liveBits.push('匯率');
+    if(liveBits.length)metaChip('macroMeta','up', liveBits.join('／')+' 盤中即時 · VIXTWN 日更'); }
 }
 function drawMacro(){
   const el=document.getElementById('chart-macro'); if(!el)return;
