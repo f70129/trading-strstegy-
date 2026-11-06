@@ -1,7 +1,7 @@
 {
   "source": "CBOE Equity Put/Call Ratio (https://www.cboe.com/us/options/market_statistics/daily/)",
-  "updated": "2026-11-05",
-  "count": 118,
+  "updated": "2026-11-06",
+  "count": 119,
   "data": [
     {
       "date": "2026-05-21",
@@ -474,6 +474,10 @@
     {
       "date": "2026-11-05",
       "pc": 0.44
+    },
+    {
+      "date": "2026-11-06",
+      "pc": 0.89
     }
   ]
 }
