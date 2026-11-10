@@ -260,29 +260,23 @@ def _fetch_pcr_window(start, end):
 
 
 def _diagnose_range():
-    """一次性:對固定歷史區間試多組參數,找出能回傳整段區間的欄位組合。"""
+    """一次性:取 pcRatio 顯示頁(queryType=2 + 2024 區間),印出資料列附近 HTML。"""
     s, e = "2024/01/02", "2024/06/30"
-    variants = [
-        ("POST", TAIFEX_DOWN, {"queryStartDate": s, "queryEndDate": e}),
-        ("POST", TAIFEX_DOWN, {"queryType": "2", "queryStartDate": s, "queryEndDate": e}),
-        ("POST", TAIFEX_DOWN, {"queryType": "2", "marketCode": "0", "queryStartDate": s, "queryEndDate": e}),
-        ("POST", TAIFEX_DOWN, {"syear": "2024", "smonth": "01", "sday": "02",
-                               "eyear": "2024", "emonth": "06", "eday": "30"}),
-        ("POST", TAIFEX_DOWN, {"datestart": s, "dateend": e}),
-        ("GET", TAIFEX_DOWN, {"queryStartDate": s, "queryEndDate": e}),
-        ("POST", TAIFEX_PAGE, {"queryType": "2", "queryStartDate": s, "queryEndDate": e}),
-    ]
-    for method, url, data in variants:
+    r = requests.post(TAIFEX_PAGE, data={"queryType": "2", "queryStartDate": s, "queryEndDate": e},
+                      headers={**UA, "Referer": TAIFEX_PAGE}, timeout=90)
+    for enc in ("utf-8", "big5", "cp950"):
         try:
-            if method == "GET":
-                r = requests.get(url, params=data, headers={**UA, "Referer": TAIFEX_PAGE}, timeout=90)
-            else:
-                r = requests.post(url, data=data, headers={**UA, "Referer": TAIFEX_PAGE}, timeout=90)
-            rows = _parse_pcr_any(r.content)
-            ds = f"{rows[0][0]}..{rows[-1][0]}" if rows else "-"
-            print(f"[pcr][probe] {method} {url.split('/')[-1]} {list(data)} -> {len(rows)} rows [{ds}] len={len(r.content)}", file=sys.stderr)
-        except Exception as ex:
-            print(f"[pcr][probe] {method} {url.split('/')[-1]} {list(data)} ERR {ex}", file=sys.stderr)
+            html = r.content.decode(enc); break
+        except UnicodeDecodeError:
+            html = r.content.decode("big5", errors="replace")
+    print(f"[pcr][probe] pcRatio qt2: len={len(html)} '日期'x{html.count('日期')} '2024/'x{html.count('2024/')} '2024/06'x{html.count('2024/06')}", file=sys.stderr)
+    i = html.find("2024/06")
+    if i < 0:
+        i = html.find("日期")
+    if i >= 0:
+        snip = html[max(0, i - 400):i + 900].replace("\n", " ").replace("\t", " ")
+        snip = " ".join(snip.split())
+        print(f"[pcr][probe] around idx {i}: {snip!r}", file=sys.stderr)
 
 
 def load_pcr_down():
