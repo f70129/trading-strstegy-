@@ -465,6 +465,23 @@ footer b{color:var(--ink-2)}
       </div>
     </section>
 
+    <!-- 台指選擇權 Put/Call 未平倉比 · 回測與動態警戒 -->
+    <section class="card col-12" id="pcrCard">
+      <div class="hd"><span class="t">台指選擇權 P/C 未平倉比</span><span class="s">歷史回測 · 動態警戒線 · 跌破後報酬</span><div class="meta" id="pcrMeta"></div></div>
+      <div class="body">
+        <div id="pcrAlert" class="pcc-alert">載入中…</div>
+        <div class="finra-stats">
+          <div class="ftile"><span class="lb">最新 P/C(OI)</span><span class="vv" id="pcrLast">—</span><span class="sub" id="pcrDate">—</span></div>
+          <div class="ftile"><span class="lb">歷史分位</span><span class="vv" id="pcrPct">—</span><span class="sub">越低＝Put 未平倉越少</span></div>
+          <div class="ftile"><span class="lb">偏空警戒線</span><span class="vv" id="pcrWarn" style="color:#dc2626">—</span><span class="sub" id="pcrWarnSub">跌破後10日</span></div>
+          <div class="ftile"><span class="lb">偏多機會線</span><span class="vv" id="pcrOpp" style="color:#16a34a">—</span><span class="sub" id="pcrOppSub">跌破後10日</span></div>
+        </div>
+        <div id="chart-pcr2" class="echart" style="height:220px"></div>
+        <div class="mtable-wrap" style="max-height:220px;margin-top:10px"><table class="mtable" id="pcrTable"></table></div>
+        <div class="mg-note" id="pcrNote"></div>
+      </div>
+    </section>
+
     <!-- AAII 美股投資人情緒 -->
     <section class="card col-12" id="aaiiCard">
       <div class="hd"><span class="t">AAII 投資人情緒調查</span><span class="s">美股散戶每週多空 · 經典反向指標</span><div class="meta" id="aaiiMeta"></div></div>
@@ -839,6 +856,7 @@ async function loadAll(){
   if(!FINRA)loadFINRA(); // 美國 FINRA 月度融資餘額，與個股無關，載入一次即快取
   if(!PCC)loadPCC(); // CBOE 股票 Put/Call 比率（每日），與個股無關，載入一次即快取
   if(!OTC)loadOTC(); // 櫃買指數 × 融資減碼 追蹤，與個股無關，載入一次即快取
+  if(!PCR)loadPCR(); // 台指選擇權 P/C 未平倉比回測，與個股無關，載入一次即快取
   loadHolders(id); // 大戶持股 800~1000張（集保分散表，per-stock），每次查詢更新
 }
 function setStatus(mode,extra){
@@ -873,7 +891,7 @@ function updateHeader(id,name){
 /* ---------- render orchestrator ---------- */
 function renderAll(){
   if(!PRICE.length)return;
-  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawHolders,drawAAII,renderStockMargin,drawMarketMargin,drawFINRA,drawPCC,drawOTC,drawRiskOverview,renderAdvice]
+  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawHolders,drawAAII,renderStockMargin,drawMarketMargin,drawFINRA,drawPCC,drawPCR,drawOTC,drawRiskOverview,renderAdvice]
     .forEach(fn=>{try{fn();}catch(e){console.error(fn.name,e);}});
   requestAnimationFrame(()=>Object.values(charts).forEach(c=>c&&c.resize()));
 }
@@ -1214,6 +1232,12 @@ function renderAdvice(){
   // 大戶籌碼（集保分散表，選定級距的月增減持）
   if(typeof HOLDERS!=='undefined'&&HOLDERS&&HOLDERS.rows){ const hc=holderMonthChg(holderLevel), lab=HLV[holderLevel].label;
     if(hc!=null){ if(hc>0.15)pos.push('大戶月增持('+lab+')'); else if(hc<-0.15)neg.push('大戶月減持('+lab+')'); } }
+  // 台指選擇權 P/C 未平倉比（回測動態警戒線）
+  if(typeof PCR!=='undefined'&&PCR&&PCR.series&&PCR.series.length){
+    const cur=(PCR.latest&&PCR.latest.pcoi!=null)?PCR.latest.pcoi:PCR.series.at(-1).pcoi;
+    if(PCR.warn&&cur<=PCR.warn.level)neg.push('P/C未平倉破警戒('+cur.toFixed(2)+')');
+    else if(PCR.opp&&cur<=PCR.opp.level)pos.push('P/C未平倉達機會線('+cur.toFixed(2)+')');
+  }
   // 大盤環境
   let macroNote='大盤環境資料載入中…';
   if(MACRO){
@@ -1714,6 +1738,57 @@ function drawHolders(){
            {type:'value',gridIndex:1,scale:true,name:'收盤價',nameTextStyle:{color:p.accent,fontSize:10,fontWeight:600,align:'left'},nameGap:6,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9},axisLine:{show:false},axisTick:{show:false}}],
     series:[{name:lab+'占比%',type:'line',xAxisIndex:0,yAxisIndex:0,data:base.map(x=>+x.pct.toFixed(2)),showSymbol:false,smooth:true,areaStyle:{color:'rgba(167,139,250,.12)'},lineStyle:{width:1.8,color:'#a78bfa'}},
             {name:'收盤價',type:'line',xAxisIndex:1,yAxisIndex:1,data:prices,showSymbol:false,smooth:true,connectNulls:true,lineStyle:{width:1.6,color:p.accent}}]},true);
+}
+
+/* ---------- 台指選擇權 P/C 未平倉比（回測 + 動態警戒，資料由 Action 寫入 pcr.json）---------- */
+let PCR=null;
+async function loadPCR(){
+  try{ const r=await fetch('pcr.json',{cache:'no-store'}); if(r.ok){const j=await r.json(); if(j&&Array.isArray(j.series))PCR=j;} }catch(e){}
+  drawPCR();
+}
+function drawPCR(){
+  const card=document.getElementById('pcrCard'); if(!card)return; const p=pal();
+  const s=(PCR&&PCR.series)?PCR.series:[];
+  const al=document.getElementById('pcrAlert');
+  if(!s.length){
+    metaChip('pcrMeta','neu','等待 Action'); if(al)al.style.display='none';
+    document.getElementById('pcrNote').textContent='P/C 未平倉回測資料由每日 GitHub Action 寫入 pcr.json;首次執行後顯示。';
+    const c=mk('chart-pcr2'); if(c)c.setOption({graphic:{type:'text',left:'center',top:'middle',style:{text:'等待 P/C 回測資料…',fill:p.muted,font:'12px sans-serif'}}},true);
+    document.getElementById('pcrTable').innerHTML=''; return;
+  }
+  const L=PCR.latest||{}, warn=PCR.warn, opp=PCR.opp;
+  document.getElementById('pcrLast').textContent=(L.pcoi!=null?L.pcoi:s.at(-1).pcoi).toFixed(3);
+  document.getElementById('pcrDate').textContent=L.date||s.at(-1).date;
+  document.getElementById('pcrPct').textContent=L.pctile!=null?L.pctile.toFixed(0)+'%':'—';
+  document.getElementById('pcrWarn').textContent=warn?warn.level:'—';
+  document.getElementById('pcrWarnSub').textContent=warn?`跌破後10日 ${warn.avg10>=0?'+':''}${warn.avg10}%（勝率${warn.win10}%）`:'—';
+  document.getElementById('pcrOpp').textContent=opp?opp.level:'—';
+  document.getElementById('pcrOppSub').textContent=opp?`跌破後10日 ${opp.avg10>=0?'+':''}${opp.avg10}%（勝率${opp.win10}%）`:'—';
+  // 警示橫幅
+  const cur=L.pcoi!=null?L.pcoi:s.at(-1).pcoi;
+  let cls='warn';
+  if(warn&&cur<=warn.level)cls='danger'; else if(opp&&cur<=opp.level)cls='safe';
+  const col={safe:'#16a34a',warn:'#d97706',danger:'#dc2626'}[cls], bg={safe:'rgba(22,163,74,.12)',warn:'rgba(217,119,6,.12)',danger:'rgba(220,38,38,.12)'}[cls];
+  al.style.display='block'; al.textContent=(cls==='danger'?'🔴 ':cls==='safe'?'🟢 ':'⚪ ')+(PCR.reco||''); al.style.background=bg; al.style.color=col; al.style.border='1px solid '+col+'55';
+  metaChip('pcrMeta',cls==='danger'?'down':cls==='safe'?'up':'warn',`P/C ${cur.toFixed(2)} · p${L.pctile!=null?L.pctile.toFixed(0):'—'}`);
+  document.getElementById('pcrNote').innerHTML=`資料源 ${PCR.dataset_used||'FinMind'} · 更新 ${PCR.updated||'—'}。動態警戒線＝回測中「跌破後10日平均報酬」最差(偏空)與最佳(偏多)的門檻,每次更新重算。<span style="color:var(--muted)"> ※ 統計傾向,非投資建議。</span>`;
+  // 圖：P/C(OI) + 警戒/機會線
+  const d=s.slice(-250);
+  const c=mk('chart-pcr2');
+  const ml=[]; if(warn)ml.push({yAxis:warn.level,lineStyle:{color:'#dc2626',type:'dashed',width:1},label:{formatter:'偏空警戒',color:'#dc2626',fontSize:9,position:'insideEndTop'}});
+  if(opp)ml.push({yAxis:opp.level,lineStyle:{color:'#16a34a',type:'dashed',width:1},label:{formatter:'偏多機會',color:'#16a34a',fontSize:9,position:'insideEndBottom'}});
+  if(c)c.setOption({animation:false,
+    tooltip:{trigger:'axis',backgroundColor:p.panel,borderColor:p.border,borderWidth:1,textStyle:{color:p.ink,fontSize:11},valueFormatter:v=>v==null?'—':(+v).toFixed(3)},
+    grid:{left:46,right:14,top:12,bottom:22},
+    xAxis:{type:'category',data:d.map(x=>x.date.slice(5)),axisLabel:{color:p.muted,fontSize:9,interval:Math.ceil(d.length/10)},axisTick:{show:false},axisLine:{lineStyle:{color:p.border}}},
+    yAxis:{type:'value',scale:true,splitLine:{lineStyle:{color:p.grid}},axisLabel:{color:p.muted,fontSize:9},axisLine:{show:false},axisTick:{show:false}},
+    series:[{name:'P/C(OI)',type:'line',data:d.map(x=>x.pcoi),showSymbol:false,smooth:true,lineStyle:{width:1.6,color:'#38bdf8'},markLine:{symbol:'none',silent:true,data:ml}}]},true);
+  // 回測表
+  const bt=PCR.backtest||[];
+  let html='<thead><tr><th>門檻(分位)</th><th>跌破後5日</th><th>勝率</th><th>跌破後10日</th><th>勝率</th><th>樣本</th></tr></thead><tbody>';
+  bt.forEach(r=>{ const hi=(warn&&r.level===warn.level)||(opp&&r.level===opp.level);
+    html+=`<tr${hi?' style="background:var(--panel-2)"':''}><td>${r.level} (p${r.pctile})</td><td class="${r.avg5>=0?'up':'down'}">${r.avg5!=null?(r.avg5>=0?'+':'')+r.avg5+'%':'—'}</td><td>${r.win5!=null?r.win5+'%':'—'}</td><td class="${r.avg10>=0?'up':'down'}">${r.avg10!=null?(r.avg10>=0?'+':'')+r.avg10+'%':'—'}</td><td>${r.win10!=null?r.win10+'%':'—'}</td><td>${r.n}</td></tr>`; });
+  document.getElementById('pcrTable').innerHTML=html+'</tbody>';
 }
 
 /* ---------- settings ---------- */
