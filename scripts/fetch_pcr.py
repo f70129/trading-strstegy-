@@ -189,8 +189,32 @@ def _parse_pcr_html(content):
     return best
 
 
+def _fetch_pcr_window(start, end):
+    """單一區間:試多個端點/欄位,回傳解析到最多列的那組 [(date,pcoi)]。
+    pcRatioDown 以 HTML 文件回傳整個區間的表格。"""
+    s, e = start.strftime("%Y/%m/%d"), end.strftime("%Y/%m/%d")
+    attempts = [
+        (TAIFEX_DOWN, {"queryStartDate": s, "queryEndDate": e}),
+        (TAIFEX_DOWN, {"down": "", "queryStartDate": s, "queryEndDate": e}),
+        (TAIFEX_PAGE, {"queryStartDate": s, "queryEndDate": e}),
+    ]
+    best = []
+    for url, data in attempts:
+        try:
+            r = requests.post(url, data=data, headers={**UA, "Referer": TAIFEX_PAGE}, timeout=90)
+            r.raise_for_status()
+            rows = _parse_pcr_html(r.content)
+            if len(rows) > len(best):
+                best = rows
+            if len(rows) > 2:  # 已取得整段區間,不需再試其他端點
+                break
+        except Exception as ex:
+            print(f"[pcr]   {url} {s}..{e}: {ex}", file=sys.stderr)
+    return best
+
+
 def load_pcr_down():
-    """分段(~120 天視窗)POST pcRatio 顯示頁,解析 HTML 表格累積歷年資料。"""
+    """分段(~120 天視窗)抓 TAIFEX,解析 HTML 表格累積歷年資料。"""
     import time
     WINDOW = 120
     acc = {}
@@ -199,29 +223,18 @@ def load_pcr_down():
     windows = ok = 0
     while cur < now:
         nxt = min(cur + timedelta(days=WINDOW), now)
-        try:
-            r = requests.post(
-                TAIFEX_PAGE,
-                data={"queryStartDate": cur.strftime("%Y/%m/%d"),
-                      "queryEndDate": nxt.strftime("%Y/%m/%d")},
-                headers={**UA, "Referer": TAIFEX_PAGE},
-                timeout=90,
-            )
-            r.raise_for_status()
-            rows = _parse_pcr_html(r.content)
-            for d, v in rows:
-                acc[d] = v
-            if rows:
-                ok += 1
-        except Exception as e:
-            print(f"[pcr] window {cur:%Y-%m-%d}..{nxt:%Y-%m-%d} failed: {e}", file=sys.stderr)
+        rows = _fetch_pcr_window(cur, nxt)
+        for d, v in rows:
+            acc[d] = v
+        if rows:
+            ok += 1
         windows += 1
         cur = nxt + timedelta(days=1)
         time.sleep(0.4)
     out = sorted(acc.items())
     if not out:
-        raise ValueError(f"pcRatio page parsed 0 rows across {windows} windows")
-    print(f"[pcr] TAIFEX page P/C(OI): {len(out)} rows ({ok}/{windows} windows ok); latest {out[-1]}")
+        raise ValueError(f"TAIFEX parsed 0 rows across {windows} windows")
+    print(f"[pcr] TAIFEX P/C(OI): {len(out)} rows ({ok}/{windows} windows ok); latest {out[-1]}")
     return out
 
 
