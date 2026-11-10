@@ -1,0 +1,11 @@
+{
+  "source": "FinMind TAIFEX TXO Put/Call open-interest ratio + TAIEX",
+  "updated": "pending",
+  "note": "populated by .github/workflows/pcr.yml on first run",
+  "latest": null,
+  "series": [],
+  "backtest": [],
+  "warn": null,
+  "opp": null,
+  "reco": ""
+}

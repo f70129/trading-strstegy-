@@ -1,0 +1,35 @@
+name: Update TXO put/call ratio backtest
+
+on:
+  schedule:
+    # TXO OI is published after the Taiwan close; run Tue-Sat 14:00 UTC
+    - cron: "0 14 * * 2-6"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet requests
+      - name: Fetch + backtest P/C ratio
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        run: python scripts/fetch_pcr.py
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pcr.json
+          if git diff --staged --quiet; then
+            echo "No change in P/C ratio data."
+          else
+            git commit -m "chore: update TXO put/call ratio backtest"
+            git push
+          fi
