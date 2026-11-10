@@ -473,7 +473,7 @@ footer b{color:var(--ink-2)}
         <div class="finra-stats">
           <div class="ftile"><span class="lb">最新 P/C(OI)</span><span class="vv" id="pcrLast">—</span><span class="sub" id="pcrDate">—</span></div>
           <div class="ftile"><span class="lb">歷史分位</span><span class="vv" id="pcrPct">—</span><span class="sub">越低＝Put 未平倉越少</span></div>
-          <div class="ftile"><span class="lb">偏空警戒線</span><span class="vv" id="pcrWarn" style="color:#dc2626">—</span><span class="sub" id="pcrWarnSub">跌破後10日</span></div>
+          <div class="ftile"><span class="lb">偏空參考線</span><span class="vv" id="pcrWarn" style="color:#dc2626">—</span><span class="sub" id="pcrWarnSub">跌破後10日</span></div>
           <div class="ftile"><span class="lb">偏多機會線</span><span class="vv" id="pcrOpp" style="color:#16a34a">—</span><span class="sub" id="pcrOppSub">跌破後10日</span></div>
         </div>
         <div id="chart-pcr2" class="echart" style="height:220px"></div>
@@ -1232,11 +1232,11 @@ function renderAdvice(){
   // 大戶籌碼（集保分散表，選定級距的月增減持）
   if(typeof HOLDERS!=='undefined'&&HOLDERS&&HOLDERS.rows){ const hc=holderMonthChg(holderLevel), lab=HLV[holderLevel].label;
     if(hc!=null){ if(hc>0.15)pos.push('大戶月增持('+lab+')'); else if(hc<-0.15)neg.push('大戶月減持('+lab+')'); } }
-  // 台指選擇權 P/C 未平倉比（回測動態警戒線）
+  // 台指選擇權 P/C 未平倉比（回測前瞻訊號,fetcher 已算好 signal）
   if(typeof PCR!=='undefined'&&PCR&&PCR.series&&PCR.series.length){
     const cur=(PCR.latest&&PCR.latest.pcoi!=null)?PCR.latest.pcoi:PCR.series.at(-1).pcoi;
-    if(PCR.warn&&cur<=PCR.warn.level)neg.push('P/C未平倉破警戒('+cur.toFixed(2)+')');
-    else if(PCR.opp&&cur<=PCR.opp.level)pos.push('P/C未平倉達機會線('+cur.toFixed(2)+')');
+    if(PCR.signal==='danger')neg.push('P/C未平倉前瞻偏弱('+cur.toFixed(2)+')');
+    else if(PCR.signal==='safe')pos.push('P/C未平倉前瞻偏強('+cur.toFixed(2)+')');
   }
   // 大盤環境
   let macroNote='大盤環境資料載入中…';
@@ -1764,18 +1764,19 @@ function drawPCR(){
   document.getElementById('pcrWarnSub').textContent=warn?`跌破後10日 ${warn.avg10>=0?'+':''}${warn.avg10}%（勝率${warn.win10}%）`:'—';
   document.getElementById('pcrOpp').textContent=opp?opp.level:'—';
   document.getElementById('pcrOppSub').textContent=opp?`跌破後10日 ${opp.avg10>=0?'+':''}${opp.avg10}%（勝率${opp.win10}%）`:'—';
-  // 警示橫幅
+  // 警示橫幅(由回測前瞻報酬決定訊號,fetcher 已算好 signal)
   const cur=L.pcoi!=null?L.pcoi:s.at(-1).pcoi;
-  let cls='warn';
-  if(warn&&cur<=warn.level)cls='danger'; else if(opp&&cur<=opp.level)cls='safe';
-  const col={safe:'#16a34a',warn:'#d97706',danger:'#dc2626'}[cls], bg={safe:'rgba(22,163,74,.12)',warn:'rgba(217,119,6,.12)',danger:'rgba(220,38,38,.12)'}[cls];
-  al.style.display='block'; al.textContent=(cls==='danger'?'🔴 ':cls==='safe'?'🟢 ':'⚪ ')+(PCR.reco||''); al.style.background=bg; al.style.color=col; al.style.border='1px solid '+col+'55';
+  let cls=PCR.signal||'neutral';
+  if(!['danger','warn','safe','neutral'].includes(cls)) cls='neutral';
+  const col={safe:'#16a34a',neutral:'#d97706',warn:'#d97706',danger:'#dc2626'}[cls], bg={safe:'rgba(22,163,74,.12)',neutral:'rgba(217,119,6,.12)',warn:'rgba(217,119,6,.12)',danger:'rgba(220,38,38,.12)'}[cls];
+  const icon={safe:'🟢 ',neutral:'⚪ ',warn:'⚪ ',danger:'🔴 '}[cls];
+  al.style.display='block'; al.textContent=icon+(PCR.reco||''); al.style.background=bg; al.style.color=col; al.style.border='1px solid '+col+'55';
   metaChip('pcrMeta',cls==='danger'?'down':cls==='safe'?'up':'warn',`P/C ${cur.toFixed(2)} · p${L.pctile!=null?L.pctile.toFixed(0):'—'}`);
-  document.getElementById('pcrNote').innerHTML=`資料源 ${PCR.dataset_used||'FinMind'} · 更新 ${PCR.updated||'—'}。動態警戒線＝回測中「跌破後10日平均報酬」最差(偏空)與最佳(偏多)的門檻,每次更新重算。<span style="color:var(--muted)"> ※ 統計傾向,非投資建議。</span>`;
+  document.getElementById('pcrNote').innerHTML=`資料源 ${PCR.dataset_used||'FinMind'} · 更新 ${PCR.updated||'—'}。偏多機會線＝回測中「跌破後10日平均報酬」最佳門檻、偏空參考線＝最弱門檻,每次更新重算(本指標多呈 P/C 越高後市前瞻越強)。<span style="color:var(--muted)"> ※ 統計傾向,非投資建議。</span>`;
   // 圖：P/C(OI) + 警戒/機會線
   const d=s.slice(-250);
   const c=mk('chart-pcr2');
-  const ml=[]; if(warn)ml.push({yAxis:warn.level,lineStyle:{color:'#dc2626',type:'dashed',width:1},label:{formatter:'偏空警戒',color:'#dc2626',fontSize:9,position:'insideEndTop'}});
+  const ml=[]; if(warn)ml.push({yAxis:warn.level,lineStyle:{color:'#dc2626',type:'dashed',width:1},label:{formatter:'偏空參考',color:'#dc2626',fontSize:9,position:'insideEndTop'}});
   if(opp)ml.push({yAxis:opp.level,lineStyle:{color:'#16a34a',type:'dashed',width:1},label:{formatter:'偏多機會',color:'#16a34a',fontSize:9,position:'insideEndBottom'}});
   if(c)c.setOption({animation:false,
     tooltip:{trigger:'axis',backgroundColor:p.panel,borderColor:p.border,borderWidth:1,textStyle:{color:p.ink,fontSize:11},valueFormatter:v=>v==null?'—':(+v).toFixed(3)},
