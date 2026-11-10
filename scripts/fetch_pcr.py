@@ -259,9 +259,36 @@ def _fetch_pcr_window(start, end):
     return best
 
 
+def _diagnose_range():
+    """一次性:對固定歷史區間試多組參數,找出能回傳整段區間的欄位組合。"""
+    s, e = "2024/01/02", "2024/06/30"
+    variants = [
+        ("POST", TAIFEX_DOWN, {"queryStartDate": s, "queryEndDate": e}),
+        ("POST", TAIFEX_DOWN, {"queryType": "2", "queryStartDate": s, "queryEndDate": e}),
+        ("POST", TAIFEX_DOWN, {"queryType": "2", "marketCode": "0", "queryStartDate": s, "queryEndDate": e}),
+        ("POST", TAIFEX_DOWN, {"syear": "2024", "smonth": "01", "sday": "02",
+                               "eyear": "2024", "emonth": "06", "eday": "30"}),
+        ("POST", TAIFEX_DOWN, {"datestart": s, "dateend": e}),
+        ("GET", TAIFEX_DOWN, {"queryStartDate": s, "queryEndDate": e}),
+        ("POST", TAIFEX_PAGE, {"queryType": "2", "queryStartDate": s, "queryEndDate": e}),
+    ]
+    for method, url, data in variants:
+        try:
+            if method == "GET":
+                r = requests.get(url, params=data, headers={**UA, "Referer": TAIFEX_PAGE}, timeout=90)
+            else:
+                r = requests.post(url, data=data, headers={**UA, "Referer": TAIFEX_PAGE}, timeout=90)
+            rows = _parse_pcr_any(r.content)
+            ds = f"{rows[0][0]}..{rows[-1][0]}" if rows else "-"
+            print(f"[pcr][probe] {method} {url.split('/')[-1]} {list(data)} -> {len(rows)} rows [{ds}] len={len(r.content)}", file=sys.stderr)
+        except Exception as ex:
+            print(f"[pcr][probe] {method} {url.split('/')[-1]} {list(data)} ERR {ex}", file=sys.stderr)
+
+
 def load_pcr_down():
     """分段(~120 天視窗)抓 TAIFEX,解析 HTML 表格累積歷年資料。"""
     import time
+    _diagnose_range()
     WINDOW = 120
     acc = {}
     now = datetime.now(timezone.utc)
