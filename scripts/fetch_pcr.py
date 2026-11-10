@@ -227,110 +227,107 @@ def _parse_pcr_any(content):
     return rows
 
 
-def _fetch_pcr_window(start, end):
-    """單一區間:試多個端點/欄位,回傳解析到最多列的那組 [(date,pcoi)]。"""
-    global _DIAG_DONE
-    s, e = start.strftime("%Y/%m/%d"), end.strftime("%Y/%m/%d")
-    attempts = [
-        (TAIFEX_DOWN, {"queryStartDate": s, "queryEndDate": e}),
-        (TAIFEX_DOWN, {"down": "", "queryStartDate": s, "queryEndDate": e}),
-        (TAIFEX_PAGE, {"queryStartDate": s, "queryEndDate": e}),
-    ]
-    best = []
-    for url, data in attempts:
-        try:
-            r = requests.post(url, data=data, headers={**UA, "Referer": TAIFEX_PAGE}, timeout=90)
-            r.raise_for_status()
-            if not _DIAG_DONE:
-                body = r.content
-                snip = body[:300].decode("big5", errors="replace").replace("\n", " ")
-                print(f"[pcr][diag] {url} fields={list(data)} status={r.status_code} "
-                      f"ctype={r.headers.get('Content-Type')} len={len(body)} "
-                      f"has_table={b'<table' in body.lower()} has_date={('日期' in body.decode('big5', 'ignore'))} "
-                      f"head={snip!r}", file=sys.stderr)
-            rows = _parse_pcr_any(r.content)
-            if len(rows) > len(best):
-                best = rows
-            if len(rows) > 2:
-                break
-        except Exception as ex:
-            print(f"[pcr]   {url} {s}..{e}: {ex}", file=sys.stderr)
-    _DIAG_DONE = True
-    return best
+def _finmind_get(dataset, data_id, start, end):
+    params = {"dataset": dataset, "data_id": data_id, "start_date": start, "end_date": end}
+    headers = dict(UA); headers["Accept"] = "application/json"
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"; params["token"] = TOKEN
+    r = requests.get(FINMIND_API, params=params, headers=headers, timeout=120)
+    r.raise_for_status()
+    j = r.json()
+    return (j.get("data", []) or []) if isinstance(j, dict) else []
 
 
-def _diagnose_range():
-    """一次性:取 pcRatio 顯示頁(queryType=2 + 2024 區間),印出資料列附近 HTML。"""
-    s, e = "2024/01/02", "2024/06/30"
-    r = requests.post(TAIFEX_PAGE, data={"queryType": "2", "queryStartDate": s, "queryEndDate": e},
-                      headers={**UA, "Referer": TAIFEX_PAGE}, timeout=90)
-    for enc in ("utf-8", "big5", "cp950"):
-        try:
-            html = r.content.decode(enc); break
-        except UnicodeDecodeError:
-            html = r.content.decode("big5", errors="replace")
-    print(f"[pcr][probe] pcRatio qt2: len={len(html)} '日期'x{html.count('日期')} '2024/'x{html.count('2024/')} '2024/06'x{html.count('2024/06')}", file=sys.stderr)
-    i = html.find("2024/06")
-    if i < 0:
-        i = html.find("日期")
-    if i >= 0:
-        snip = html[max(0, i - 400):i + 900].replace("\n", " ").replace("\t", " ")
-        snip = " ".join(snip.split())
-        print(f"[pcr][probe] around idx {i}: {snip!r}", file=sys.stderr)
+_HIST_DIAG = False
 
 
-def load_pcr_down():
-    """分段(~120 天視窗)抓 TAIFEX,解析 HTML 表格累積歷年資料。"""
+def load_pcr_history():
+    """以 FinMind TaiwanOptionDaily(TXO)逐月彙總 Σ賣權OI / Σ買權OI 得每日 P/C 未平倉比。
+    比值對稱,日/夜盤若重複列不影響比值。"""
     import time
-    _diagnose_range()
-    WINDOW = 120
+    global _HIST_DIAG
     acc = {}
     now = datetime.now(timezone.utc)
-    wins = []
-    cur = START_DT
-    while cur < now:
-        nxt = min(cur + timedelta(days=WINDOW), now)
-        wins.append((cur, nxt))
-        cur = nxt + timedelta(days=1)
-    wins.reverse()  # 由最近往回,便於先診斷近期視窗
-    windows = ok = 0
-    for cur, nxt in wins:
-        rows = _fetch_pcr_window(cur, nxt)
-        for d, v in rows:
-            acc[d] = v
-        if rows:
-            ok += 1
-        windows += 1
-        time.sleep(0.4)
+    y, mn = START_DT.year, START_DT.month
+    months = []
+    while (y < now.year) or (y == now.year and mn <= now.month):
+        months.append((y, mn))
+        mn += 1
+        if mn > 12:
+            y += 1; mn = 1
+    okm = 0
+    for yy, mm in months:
+        start = f"{yy:04d}-{mm:02d}-01"
+        nd = f"{yy+1:04d}-01-01" if mm == 12 else f"{yy:04d}-{mm+1:02d}-01"
+        end = (datetime.strptime(nd, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        try:
+            rows = _finmind_get("TaiwanOptionDaily", "TXO", start, end)
+        except Exception as ex:
+            print(f"[pcr] opt {start}: {ex}", file=sys.stderr)
+            rows = []
+        daymap = {}       # date -> [put_oi, call_oi]
+        cp_samples, key_sample = set(), None
+        for r in rows:
+            if key_sample is None:
+                key_sample = list(r.keys())
+            d = r.get("date")
+            if not d:
+                continue
+            cp = str(r.get("call_put") or r.get("CallPut") or r.get("type") or r.get("cp") or "")
+            oi = num(r.get("open_interest") if "open_interest" in r else
+                     (r.get("OpenInterest") or r.get("open_interest_balance")))
+            if oi is None:
+                continue
+            if len(cp_samples) < 8:
+                cp_samples.add(cp)
+            cl = cp.strip().lower()
+            if cl.startswith("p") or "賣" in cp:
+                idx = 0
+            elif cl.startswith("c") or "買" in cp:
+                idx = 1
+            else:
+                continue
+            daymap.setdefault(d, [0.0, 0.0])[idx] += oi
+        for d, (pp, cc) in daymap.items():
+            if cc > 0:
+                acc[d] = pp / cc
+        if daymap:
+            okm += 1
+        if not _HIST_DIAG:
+            last = sorted(daymap.items())[-1] if daymap else None
+            print(f"[pcr][hist] {start}..{end}: rows={len(rows)} days={len(daymap)} "
+                  f"cp={sorted(cp_samples)} keys={key_sample} last={last}", file=sys.stderr)
+            _HIST_DIAG = True
+        time.sleep(0.25)
     out = sorted(acc.items())
     if not out:
-        raise ValueError(f"TAIFEX parsed 0 rows across {windows} windows")
-    print(f"[pcr] TAIFEX P/C(OI): {len(out)} rows ({ok}/{windows} windows ok); latest {out[-1]}")
+        raise ValueError("FinMind TaiwanOptionDaily produced 0 days")
+    print(f"[pcr] FinMind option P/C(OI): {len(out)} days ({okm}/{len(months)} months); latest {out[-1]}")
     return out
 
 
 def load_pcr():
     """回傳 (source_label, [(date, pc_oi_ratio), ...] sorted).
-    以分段下載取得歷年資料為主,再以 OpenAPI 補最近 21 日。"""
+    以 FinMind 選擇權日資料彙總歷年為主,再以 TAIFEX OpenAPI 補最近 21 日。"""
     merged = {}
     errs = []
     try:
-        for d, v in load_pcr_down():
+        for d, v in load_pcr_history():
             merged[d] = v
     except Exception as e:
-        errs.append(f"down: {e}")
-        print(f"[pcr] load_pcr_down failed: {e}", file=sys.stderr)
+        errs.append(f"history: {e}")
+        print(f"[pcr] load_pcr_history failed: {e}", file=sys.stderr)
     try:
         for d, v in load_pcr_openapi():
-            merged.setdefault(d, v)  # 下載值優先,OpenAPI 僅補缺
+            merged.setdefault(d, v)  # 歷年值優先,OpenAPI 僅補最近缺漏
     except Exception as e:
         errs.append(f"openapi: {e}")
         print(f"[pcr] load_pcr_openapi failed: {e}", file=sys.stderr)
     out = sorted(merged.items())
     if not out:
-        raise SystemExit("[pcr] all TAIFEX sources failed: " + " | ".join(errs))
+        raise SystemExit("[pcr] all P/C sources failed: " + " | ".join(errs))
     print(f"[pcr] merged P/C(OI): {len(out)} rows; latest {out[-1]}")
-    return "台灣期交所 TAIFEX Put/Call 未平倉比", out
+    return "FinMind 台指選擇權日未平倉彙總(TXO)+ 期交所 OpenAPI 補近月", out
 
 
 # ---------- TAIEX 指數 ----------
