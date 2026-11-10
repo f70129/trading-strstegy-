@@ -189,9 +189,47 @@ def _parse_pcr_html(content):
     return best
 
 
+_DIAG_DONE = False
+
+
+def _parse_pcr_any(content):
+    """同時嘗試 HTML 表格與 CSV 兩種格式,回傳列數較多者。"""
+    rows = _parse_pcr_html(content)
+    try:
+        text = content.decode("big5", errors="replace")
+        crows = list(csv.reader(io.StringIO(text)))
+        hidx = next((i for i, r in enumerate(crows) if any("日期" in c for c in r)), None)
+        if hidx is not None:
+            header = [h.replace("\n", "").replace(" ", "") for h in crows[hidx]]
+
+            def find(*keys):
+                for i, h in enumerate(header):
+                    if all(k in h for k in keys):
+                        return i
+                return None
+            i_date, i_call, i_put, i_ratio = find("日期"), find("買權", "未平倉"), find("賣權", "未平倉"), find("未平倉", "比")
+            if i_date is not None and (i_ratio is not None or (i_call is not None and i_put is not None)):
+                cout = []
+                g = lambda row, i: row[i] if i is not None and len(row) > i else None
+                for row in crows[hidx + 1:]:
+                    if len(row) <= i_date:
+                        continue
+                    d = norm_date(row[i_date])
+                    if not d:
+                        continue
+                    v = _row_to_pcoi(d, g(row, i_call), g(row, i_put), g(row, i_ratio))
+                    if v is not None:
+                        cout.append((d, v))
+                if len(cout) > len(rows):
+                    rows = cout
+    except Exception:
+        pass
+    return rows
+
+
 def _fetch_pcr_window(start, end):
-    """單一區間:試多個端點/欄位,回傳解析到最多列的那組 [(date,pcoi)]。
-    pcRatioDown 以 HTML 文件回傳整個區間的表格。"""
+    """單一區間:試多個端點/欄位,回傳解析到最多列的那組 [(date,pcoi)]。"""
+    global _DIAG_DONE
     s, e = start.strftime("%Y/%m/%d"), end.strftime("%Y/%m/%d")
     attempts = [
         (TAIFEX_DOWN, {"queryStartDate": s, "queryEndDate": e}),
@@ -203,13 +241,21 @@ def _fetch_pcr_window(start, end):
         try:
             r = requests.post(url, data=data, headers={**UA, "Referer": TAIFEX_PAGE}, timeout=90)
             r.raise_for_status()
-            rows = _parse_pcr_html(r.content)
+            if not _DIAG_DONE:
+                body = r.content
+                snip = body[:300].decode("big5", errors="replace").replace("\n", " ")
+                print(f"[pcr][diag] {url} fields={list(data)} status={r.status_code} "
+                      f"ctype={r.headers.get('Content-Type')} len={len(body)} "
+                      f"has_table={b'<table' in body.lower()} has_date={('日期' in body.decode('big5', 'ignore'))} "
+                      f"head={snip!r}", file=sys.stderr)
+            rows = _parse_pcr_any(r.content)
             if len(rows) > len(best):
                 best = rows
-            if len(rows) > 2:  # 已取得整段區間,不需再試其他端點
+            if len(rows) > 2:
                 break
         except Exception as ex:
             print(f"[pcr]   {url} {s}..{e}: {ex}", file=sys.stderr)
+    _DIAG_DONE = True
     return best
 
 
@@ -218,18 +264,22 @@ def load_pcr_down():
     import time
     WINDOW = 120
     acc = {}
-    cur = START_DT
     now = datetime.now(timezone.utc)
-    windows = ok = 0
+    wins = []
+    cur = START_DT
     while cur < now:
         nxt = min(cur + timedelta(days=WINDOW), now)
+        wins.append((cur, nxt))
+        cur = nxt + timedelta(days=1)
+    wins.reverse()  # 由最近往回,便於先診斷近期視窗
+    windows = ok = 0
+    for cur, nxt in wins:
         rows = _fetch_pcr_window(cur, nxt)
         for d, v in rows:
             acc[d] = v
         if rows:
             ok += 1
         windows += 1
-        cur = nxt + timedelta(days=1)
         time.sleep(0.4)
     out = sorted(acc.items())
     if not out:
