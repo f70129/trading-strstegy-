@@ -311,24 +311,52 @@ def main():
     usable = [r for r in bt if r["n"] >= 8 and r["avg10"] is not None] or \
              [r for r in bt if r["n"] >= 5 and r["avg10"] is not None] or \
              [r for r in bt if r["n"] >= 3 and r["avg10"] is not None]
+    # 偏空參考線 = 跌破後 10 日前瞻報酬最弱的門檻;偏多機會線 = 最強的門檻
     warn = min(usable, key=lambda r: r["avg10"]) if usable else None
     opp = max(usable, key=lambda r: r["avg10"]) if usable else None
 
     cur = pcr[-1][1]
     cur_pct = round(sum(1 for v in vals if v <= cur) / len(vals) * 100, 0)
 
-    reco = f"目前 P/C(未平倉)={cur:.3f}(歷史分位 {cur_pct:.0f}%)。"
-    if warn:
-        reco += (f" 回測:跌破警戒線 {warn['level']}(p{warn['pctile']})後 10 日平均 "
-                 f"{warn['avg10']:+.2f}%(勝率 {warn['win10']:.0f}%、樣本 {warn['n']})。")
-        if cur <= warn["level"]:
-            reco += " 目前已處警戒區,偏空留意。"
-    if opp and opp is not warn:
-        reco += (f" 跌破機會線 {opp['level']}(p{opp['pctile']})後 10 日平均 "
-                 f"{opp['avg10']:+.2f}%(勝率 {opp['win10']:.0f}%)。")
-    reco += " ※ 統計傾向非保證,樣本有限時參考性較低。"
+    # 以現值落點取最近門檻的前瞻報酬作研判依據(本指標:P/C 越高、後市前瞻越強)
+    if warn and cur <= warn["level"]:
+        ref = warn
+    elif opp and cur >= opp["level"]:
+        ref = opp
+    else:
+        ref = min(bt, key=lambda r: abs(r["level"] - cur)) if bt else None
+    ref_avg = ref["avg10"] if ref and ref["avg10"] is not None else None
+    if ref_avg is None:
+        signal = "neutral"
+    elif ref_avg <= -0.5:
+        signal = "danger"
+    elif ref_avg >= 1.0:
+        signal = "safe"
+    else:
+        signal = "neutral"
+
+    pos_lbl = "、近區間低點" if cur_pct <= 10 else ("、近區間高點" if cur_pct >= 90 else "")
+    reco = f"目前 P/C(未平倉)={cur:.3f}(歷史分位 {cur_pct:.0f}%{pos_lbl})。"
+    if warn and opp:
+        reco += (f" 回測(樣本 {min(warn['n'], opp['n'])}~{max(warn['n'], opp['n'])}):"
+                 f"跌破偏多機會線 {opp['level']}(p{opp['pctile']})後 10 日平均 "
+                 f"{opp['avg10']:+.2f}%(勝率 {opp['win10']:.0f}%)最強;"
+                 f"跌破偏空參考線 {warn['level']}(p{warn['pctile']})後 "
+                 f"{warn['avg10']:+.2f}%(勝率 {warn['win10']:.0f}%)最弱。")
+    if ref is warn and warn:
+        if warn["avg10"] is not None and warn["avg10"] < 0:
+            reco += " 目前 P/C 偏低、避險需求低,落在前瞻最弱區,偏空留意、嚴設停損。"
+        else:
+            reco += (f" 目前 P/C 偏低、避險需求低,落在前瞻較弱區"
+                     f"(歷史 10 日仍小幅收正 {warn['avg10']:+.2f}%),追多宜謹慎、嚴設停損。")
+    elif ref is opp and opp:
+        reco += " 目前 P/C 偏高、避險濃厚,接近前瞻最強區,留意超跌反彈的偏多機會。"
+    else:
+        reco += " 目前 P/C 居中,前瞻中性,順勢操作、區間高出低進。"
+    reco += " ※ 本指標多呈「P/C 越高、後市前瞻越強」的反向情緒參考;統計傾向非保證。"
 
     payload = {
+        "signal": signal,
         "source": source,
         "dataset_used": f"{source} · 加權指數前瞻報酬基準({len(tdates)} 交易日)",
         "updated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
