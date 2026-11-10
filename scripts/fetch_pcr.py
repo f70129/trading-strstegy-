@@ -3,9 +3,11 @@
 加權指數報酬,導出動態警戒線與建議,寫入 pcr.json.
 
 資料源:
-  - Put/Call 未平倉比: 台灣期交所 (TAIFEX) 官方 pcRatio 下載檔(買權/賣權未平倉量,
-    自行計算 賣權OI / 買權OI = Put/Call 未平倉比)。這是最原始的權威來源;FinMind
-    並未提供對應資料集(所有候選名稱皆回 422),故直接取用期交所公開檔(免 token)。
+  - Put/Call 未平倉比: 以 FinMind TaiwanOptionDaily(TXO)逐月彙總
+    Σ賣權未平倉 / Σ買權未平倉 得每日 P/C 未平倉比(比值對稱,日/夜盤重複列不影響);
+    台灣期交所 OpenAPI(PutCallRatio,滾動近 21 日)補最近缺漏日。
+    註:期交所歷史查詢頁為 JS 驅動,簡單 HTTP 僅能取回近一個月,故歷年資料改由
+    FinMind 原始選擇權日資料彙總。
   - 加權指數(TAIEX): FinMind TaiwanStockTotalReturnIndex(data_id=TAIEX);
     若無資料則改用 Yahoo ^TWII 日線作為前瞻報酬基準。
 
@@ -13,8 +15,6 @@
 動態警戒線 = 樣本足夠的門檻中,跌破後 10 日平均報酬最差者(偏空警戒)與最佳者
 (偏多機會),每次執行重算 → 即「動態」。
 """
-import csv
-import io
 import json
 import os
 import sys
@@ -30,46 +30,7 @@ START = START_DT.strftime("%Y-%m-%d")
 UA = {"User-Agent": "Mozilla/5.0 (compatible; dashboard-bot/1.0)", "Accept": "*/*"}
 
 TAIFEX_OPENAPI = "https://openapi.taifex.com.tw/v1/PutCallRatio"
-TAIFEX_DOWN = "https://www.taifex.com.tw/cht/3/pcRatioDown"
-TAIFEX_PAGE = "https://www.taifex.com.tw/cht/3/pcRatio"
 FINMIND_API = "https://api.finmindtrade.com/api/v4/data"
-
-from html.parser import HTMLParser
-
-
-class _TableParser(HTMLParser):
-    """擷取所有 <table> 的列/儲存格文字(容忍巢狀表格)。"""
-    def __init__(self):
-        super().__init__()
-        self.tables = []
-        self._stack = []   # 每層 table 的 rows
-        self._row = None
-        self._cell = None
-
-    def handle_starttag(self, tag, attrs):
-        if tag == "table":
-            self._stack.append([])
-        elif tag == "tr" and self._stack:
-            self._row = []
-        elif tag in ("td", "th") and self._row is not None:
-            self._cell = []
-
-    def handle_endtag(self, tag):
-        if tag == "table" and self._stack:
-            rows = self._stack.pop()
-            if rows:
-                self.tables.append(rows)
-        elif tag == "tr" and self._row is not None and self._stack:
-            self._stack[-1].append(self._row)
-            self._row = None
-        elif tag in ("td", "th") and self._cell is not None:
-            if self._row is not None:
-                self._row.append("".join(self._cell).strip())
-            self._cell = None
-
-    def handle_data(self, data):
-        if self._cell is not None:
-            self._cell.append(data)
 
 
 def norm_date(s):
@@ -139,92 +100,6 @@ def load_pcr_openapi():
         raise ValueError(f"OpenAPI parsed 0 rows; sample keys={list(data[0].keys())}")
     print(f"[pcr] TAIFEX OpenAPI P/C(OI): {len(out)} rows; latest {out[-1]}")
     return out
-
-
-def _parse_pcr_html(content):
-    """解析 pcRatio 顯示頁回傳的 HTML 表格 → [(date, pcoi)]。
-    依標題欄位名稱定位 日期 / 買權未平倉量 / 賣權未平倉量 / 未平倉比率。"""
-    text = None
-    for enc in ("utf-8", "big5", "cp950"):
-        try:
-            text = content.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
-    if text is None:
-        text = content.decode("big5", errors="replace")
-    p = _TableParser()
-    p.feed(text)
-
-    best = []
-    for rows in p.tables:
-        hidx = next((i for i, r in enumerate(rows) if any("日期" in c for c in r)), None)
-        if hidx is None:
-            continue
-        header = rows[hidx]
-
-        def find(*keys):
-            for i, h in enumerate(header):
-                hh = h.replace("\n", "").replace(" ", "")
-                if all(k in hh for k in keys):
-                    return i
-            return None
-
-        i_date, i_call, i_put, i_ratio = find("日期"), find("買權", "未平倉"), find("賣權", "未平倉"), find("未平倉", "比")
-        if i_date is None or (i_ratio is None and (i_call is None or i_put is None)):
-            continue
-        out = []
-        for row in rows[hidx + 1:]:
-            if len(row) <= i_date:
-                continue
-            d = norm_date(row[i_date])
-            if not d:
-                continue
-            g = lambda i: row[i] if i is not None and len(row) > i else None
-            v = _row_to_pcoi(d, g(i_call), g(i_put), g(i_ratio))
-            if v is not None:
-                out.append((d, v))
-        if len(out) > len(best):
-            best = out
-    return best
-
-
-_DIAG_DONE = False
-
-
-def _parse_pcr_any(content):
-    """同時嘗試 HTML 表格與 CSV 兩種格式,回傳列數較多者。"""
-    rows = _parse_pcr_html(content)
-    try:
-        text = content.decode("big5", errors="replace")
-        crows = list(csv.reader(io.StringIO(text)))
-        hidx = next((i for i, r in enumerate(crows) if any("日期" in c for c in r)), None)
-        if hidx is not None:
-            header = [h.replace("\n", "").replace(" ", "") for h in crows[hidx]]
-
-            def find(*keys):
-                for i, h in enumerate(header):
-                    if all(k in h for k in keys):
-                        return i
-                return None
-            i_date, i_call, i_put, i_ratio = find("日期"), find("買權", "未平倉"), find("賣權", "未平倉"), find("未平倉", "比")
-            if i_date is not None and (i_ratio is not None or (i_call is not None and i_put is not None)):
-                cout = []
-                g = lambda row, i: row[i] if i is not None and len(row) > i else None
-                for row in crows[hidx + 1:]:
-                    if len(row) <= i_date:
-                        continue
-                    d = norm_date(row[i_date])
-                    if not d:
-                        continue
-                    v = _row_to_pcoi(d, g(row, i_call), g(row, i_put), g(row, i_ratio))
-                    if v is not None:
-                        cout.append((d, v))
-                if len(cout) > len(rows):
-                    rows = cout
-    except Exception:
-        pass
-    return rows
 
 
 def _finmind_get(dataset, data_id, start, end):
