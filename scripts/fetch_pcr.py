@@ -29,8 +29,18 @@ START_DT = datetime.now(timezone.utc) - timedelta(days=365 * YEARS)
 START = START_DT.strftime("%Y-%m-%d")
 UA = {"User-Agent": "Mozilla/5.0 (compatible; dashboard-bot/1.0)", "Accept": "*/*"}
 
-TAIFEX_URL = "https://www.taifex.com.tw/cht/3/pcRatioDown"
+TAIFEX_OPENAPI = "https://openapi.taifex.com.tw/v1/PutCallRatio"
+TAIFEX_DOWN = "https://www.taifex.com.tw/cht/3/pcRatioDown"
 FINMIND_API = "https://api.finmindtrade.com/api/v4/data"
+
+
+def norm_date(s):
+    """各種格式 → YYYY-MM-DD,失敗回 None."""
+    s = str(s).strip()
+    digits = s.replace("/", "").replace("-", "")
+    if len(digits) == 8 and digits.isdigit():
+        return f"{digits[0:4]}-{digits[4:6]}-{digits[6:8]}"
+    return None
 
 
 def num(x):
@@ -47,19 +57,63 @@ def num(x):
 
 
 # ---------- Put/Call 未平倉比: TAIFEX ----------
-def load_pcr():
-    """回傳 (source_label, [(date, pc_oi_ratio), ...] sorted)."""
+def _row_to_pcoi(d, call_oi, put_oi, ratio_pct):
+    """由 買權OI/賣權OI 或比率%算出 P/C 未平倉比."""
+    c, p = num(call_oi), num(put_oi)
+    if c and c > 0 and p is not None:
+        return p / c
+    rv = num(ratio_pct)
+    if rv is not None:
+        return rv / 100 if rv > 5 else rv
+    return None
+
+
+def load_pcr_openapi():
+    r = requests.get(TAIFEX_OPENAPI, headers={**UA, "Accept": "application/json"}, timeout=90)
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, list) or not data:
+        raise ValueError("OpenAPI returned no list")
+
+    def pick(row, *subs):
+        for k in row:
+            kl = k.lower().replace(" ", "").replace("_", "")
+            if all(s in kl for s in subs):
+                return row[k]
+        return None
+
+    out = []
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        draw = pick(row, "date") or row.get("Date")
+        d = norm_date(draw) if draw else None
+        if not d:
+            continue
+        call_oi = pick(row, "call", "oi") or pick(row, "買權", "未平倉")
+        put_oi = pick(row, "put", "oi") or pick(row, "賣權", "未平倉")
+        ratio = pick(row, "putcall", "oi", "ratio") or pick(row, "未平倉", "比率")
+        v = _row_to_pcoi(d, call_oi, put_oi, ratio)
+        if v is not None:
+            out.append((d, v))
+    out.sort()
+    if not out:
+        raise ValueError(f"OpenAPI parsed 0 rows; sample keys={list(data[0].keys())}")
+    print(f"[pcr] TAIFEX OpenAPI P/C(OI): {len(out)} rows; latest {out[-1]}")
+    return out
+
+
+def load_pcr_down():
     start = START_DT.strftime("%Y/%m/%d")
     end = datetime.now(timezone.utc).strftime("%Y/%m/%d")
     r = requests.post(
-        TAIFEX_URL,
+        TAIFEX_DOWN,
         data={"down": "", "queryStartDate": start, "queryEndDate": end},
         headers={**UA, "Referer": "https://www.taifex.com.tw/cht/3/pcRatio",
                  "Content-Type": "application/x-www-form-urlencoded"},
         timeout=90,
     )
     r.raise_for_status()
-    # TAIFEX 檔為 Big5
     text = None
     for enc in ("big5", "cp950", "utf-8-sig", "utf-8"):
         try:
@@ -67,13 +121,10 @@ def load_pcr():
             break
         except UnicodeDecodeError:
             continue
-    if text is None:
-        text = r.content.decode("big5", errors="ignore")
-
+    if text is None or "<" in text[:10]:
+        raise ValueError("download endpoint returned non-CSV")
     rows = list(csv.reader(io.StringIO(text)))
-    if not rows:
-        raise ValueError("TAIFEX returned no rows")
-    header = [h.strip() for h in rows[0]]
+    header = [h.strip() for h in rows[0]] if rows else []
 
     def find(*keys):
         for i, h in enumerate(header):
@@ -81,37 +132,41 @@ def load_pcr():
                 return i
         return None
 
-    i_date = find("日期")
-    i_call_oi = find("買權", "未平倉")
-    i_put_oi = find("賣權", "未平倉")
-    i_ratio = find("未平倉", "比率")
-    if i_date is None or (i_ratio is None and (i_call_oi is None or i_put_oi is None)):
-        raise ValueError(f"TAIFEX header unrecognized: {header}")
-
+    i_date, i_call, i_put, i_ratio = find("日期"), find("買權", "未平倉"), find("賣權", "未平倉"), find("未平倉", "比率")
+    if i_date is None or (i_ratio is None and (i_call is None or i_put is None)):
+        raise ValueError(f"CSV header unrecognized: {header}")
     out = []
     for row in rows[1:]:
         if len(row) <= i_date:
             continue
-        d = row[i_date].strip().replace("/", "-")
-        if len(d) != 10 or not d[:4].isdigit():
+        d = norm_date(row[i_date])
+        if not d:
             continue
-        ratio = None
-        # 優先自行計算 賣權OI / 買權OI,避免比率欄位定義/單位差異
-        if i_call_oi is not None and i_put_oi is not None and len(row) > max(i_call_oi, i_put_oi):
-            c, p = num(row[i_call_oi]), num(row[i_put_oi])
-            if c and c > 0 and p is not None:
-                ratio = p / c
-        if ratio is None and i_ratio is not None and len(row) > i_ratio:
-            rv = num(row[i_ratio])
-            if rv is not None:
-                ratio = rv / 100 if rv > 5 else rv  # %→倍
-        if ratio is not None:
-            out.append((d, ratio))
+        v = _row_to_pcoi(d,
+                         row[i_call] if i_call is not None and len(row) > i_call else None,
+                         row[i_put] if i_put is not None and len(row) > i_put else None,
+                         row[i_ratio] if i_ratio is not None and len(row) > i_ratio else None)
+        if v is not None:
+            out.append((d, v))
     out.sort()
     if not out:
-        raise ValueError("TAIFEX parsed 0 usable rows")
-    print(f"[pcr] TAIFEX P/C(OI): {len(out)} rows; latest {out[-1]}")
-    return "台灣期交所 TAIFEX Put/Call 未平倉比", out
+        raise ValueError("CSV parsed 0 rows")
+    print(f"[pcr] TAIFEX CSV P/C(OI): {len(out)} rows; latest {out[-1]}")
+    return out
+
+
+def load_pcr():
+    """回傳 (source_label, [(date, pc_oi_ratio), ...] sorted)."""
+    errs = []
+    for fn in (load_pcr_openapi, load_pcr_down):
+        try:
+            out = fn()
+            if out:
+                return "台灣期交所 TAIFEX Put/Call 未平倉比", out
+        except Exception as e:
+            errs.append(f"{fn.__name__}: {e}")
+            print(f"[pcr] {fn.__name__} failed: {e}", file=sys.stderr)
+    raise SystemExit("[pcr] all TAIFEX sources failed: " + " | ".join(errs))
 
 
 # ---------- TAIEX 指數 ----------
