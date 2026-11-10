@@ -103,28 +103,16 @@ def load_pcr_openapi():
     return out
 
 
-def load_pcr_down():
-    start = START_DT.strftime("%Y/%m/%d")
-    end = datetime.now(timezone.utc).strftime("%Y/%m/%d")
-    r = requests.post(
-        TAIFEX_DOWN,
-        data={"down": "", "queryStartDate": start, "queryEndDate": end},
-        headers={**UA, "Referer": "https://www.taifex.com.tw/cht/3/pcRatio",
-                 "Content-Type": "application/x-www-form-urlencoded"},
-        timeout=90,
-    )
-    r.raise_for_status()
-    text = None
-    for enc in ("big5", "cp950", "utf-8-sig", "utf-8"):
-        try:
-            text = r.content.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
-    if text is None or "<" in text[:10]:
-        raise ValueError("download endpoint returned non-CSV")
+def _parse_pcr_csv(content):
+    """pcRatioDown 回應 Content-Type 為 text/html 但內容其實是 Big5 CSV,
+    列尾常有多餘逗號;依標題名稱取欄位。回傳 [(date, pcoi)]。"""
+    text = content.decode("big5", errors="replace")
     rows = list(csv.reader(io.StringIO(text)))
-    header = [h.strip() for h in rows[0]] if rows else []
+    # 找標題列(含「日期」)
+    hidx = next((i for i, r in enumerate(rows) if any("日期" in c for c in r)), None)
+    if hidx is None:
+        return []  # 非 CSV(多半為過大區間的錯誤 HTML 頁)
+    header = [h.strip() for h in rows[hidx]]
 
     def find(*keys):
         for i, h in enumerate(header):
@@ -132,41 +120,79 @@ def load_pcr_down():
                 return i
         return None
 
-    i_date, i_call, i_put, i_ratio = find("日期"), find("買權", "未平倉"), find("賣權", "未平倉"), find("未平倉", "比率")
+    i_date, i_call, i_put, i_ratio = find("日期"), find("買權", "未平倉"), find("賣權", "未平倉"), find("未平倉", "比")
     if i_date is None or (i_ratio is None and (i_call is None or i_put is None)):
-        raise ValueError(f"CSV header unrecognized: {header}")
+        return []
     out = []
-    for row in rows[1:]:
+    for row in rows[hidx + 1:]:
         if len(row) <= i_date:
             continue
         d = norm_date(row[i_date])
         if not d:
             continue
-        v = _row_to_pcoi(d,
-                         row[i_call] if i_call is not None and len(row) > i_call else None,
-                         row[i_put] if i_put is not None and len(row) > i_put else None,
-                         row[i_ratio] if i_ratio is not None and len(row) > i_ratio else None)
+        g = lambda i: row[i] if i is not None and len(row) > i else None
+        v = _row_to_pcoi(d, g(i_call), g(i_put), g(i_ratio))
         if v is not None:
             out.append((d, v))
-    out.sort()
+    return out
+
+
+def load_pcr_down():
+    """分段(~150 天視窗)抓取 TAIFEX pcRatioDown,累積歷年資料。"""
+    import time
+    WINDOW = 150
+    acc = {}
+    cur = START_DT
+    now = datetime.now(timezone.utc)
+    windows = 0
+    while cur < now:
+        nxt = min(cur + timedelta(days=WINDOW), now)
+        try:
+            r = requests.post(
+                TAIFEX_DOWN,
+                data={"down": "", "queryStartDate": cur.strftime("%Y/%m/%d"),
+                      "queryEndDate": nxt.strftime("%Y/%m/%d")},
+                headers={**UA, "Referer": "https://www.taifex.com.tw/cht/3/pcRatio",
+                         "Content-Type": "application/x-www-form-urlencoded"},
+                timeout=90,
+            )
+            r.raise_for_status()
+            for d, v in _parse_pcr_csv(r.content):
+                acc[d] = v
+        except Exception as e:
+            print(f"[pcr] window {cur:%Y-%m-%d}..{nxt:%Y-%m-%d} failed: {e}", file=sys.stderr)
+        windows += 1
+        cur = nxt + timedelta(days=1)
+        time.sleep(0.4)
+    out = sorted(acc.items())
     if not out:
-        raise ValueError("CSV parsed 0 rows")
-    print(f"[pcr] TAIFEX CSV P/C(OI): {len(out)} rows; latest {out[-1]}")
+        raise ValueError("pcRatioDown parsed 0 rows across all windows")
+    print(f"[pcr] TAIFEX CSV P/C(OI): {len(out)} rows over {windows} windows; latest {out[-1]}")
     return out
 
 
 def load_pcr():
-    """回傳 (source_label, [(date, pc_oi_ratio), ...] sorted)."""
+    """回傳 (source_label, [(date, pc_oi_ratio), ...] sorted).
+    以分段下載取得歷年資料為主,再以 OpenAPI 補最近 21 日。"""
+    merged = {}
     errs = []
-    for fn in (load_pcr_openapi, load_pcr_down):
-        try:
-            out = fn()
-            if out:
-                return "台灣期交所 TAIFEX Put/Call 未平倉比", out
-        except Exception as e:
-            errs.append(f"{fn.__name__}: {e}")
-            print(f"[pcr] {fn.__name__} failed: {e}", file=sys.stderr)
-    raise SystemExit("[pcr] all TAIFEX sources failed: " + " | ".join(errs))
+    try:
+        for d, v in load_pcr_down():
+            merged[d] = v
+    except Exception as e:
+        errs.append(f"down: {e}")
+        print(f"[pcr] load_pcr_down failed: {e}", file=sys.stderr)
+    try:
+        for d, v in load_pcr_openapi():
+            merged.setdefault(d, v)  # 下載值優先,OpenAPI 僅補缺
+    except Exception as e:
+        errs.append(f"openapi: {e}")
+        print(f"[pcr] load_pcr_openapi failed: {e}", file=sys.stderr)
+    out = sorted(merged.items())
+    if not out:
+        raise SystemExit("[pcr] all TAIFEX sources failed: " + " | ".join(errs))
+    print(f"[pcr] merged P/C(OI): {len(out)} rows; latest {out[-1]}")
+    return "台灣期交所 TAIFEX Put/Call 未平倉比", out
 
 
 # ---------- TAIEX 指數 ----------
