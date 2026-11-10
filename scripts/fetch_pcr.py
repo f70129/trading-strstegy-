@@ -31,7 +31,45 @@ UA = {"User-Agent": "Mozilla/5.0 (compatible; dashboard-bot/1.0)", "Accept": "*/
 
 TAIFEX_OPENAPI = "https://openapi.taifex.com.tw/v1/PutCallRatio"
 TAIFEX_DOWN = "https://www.taifex.com.tw/cht/3/pcRatioDown"
+TAIFEX_PAGE = "https://www.taifex.com.tw/cht/3/pcRatio"
 FINMIND_API = "https://api.finmindtrade.com/api/v4/data"
+
+from html.parser import HTMLParser
+
+
+class _TableParser(HTMLParser):
+    """擷取所有 <table> 的列/儲存格文字(容忍巢狀表格)。"""
+    def __init__(self):
+        super().__init__()
+        self.tables = []
+        self._stack = []   # 每層 table 的 rows
+        self._row = None
+        self._cell = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self._stack.append([])
+        elif tag == "tr" and self._stack:
+            self._row = []
+        elif tag in ("td", "th") and self._row is not None:
+            self._cell = []
+
+    def handle_endtag(self, tag):
+        if tag == "table" and self._stack:
+            rows = self._stack.pop()
+            if rows:
+                self.tables.append(rows)
+        elif tag == "tr" and self._row is not None and self._stack:
+            self._stack[-1].append(self._row)
+            self._row = None
+        elif tag in ("td", "th") and self._cell is not None:
+            if self._row is not None:
+                self._row.append("".join(self._cell).strip())
+            self._cell = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
 
 
 def norm_date(s):
@@ -103,62 +141,78 @@ def load_pcr_openapi():
     return out
 
 
-def _parse_pcr_csv(content):
-    """pcRatioDown 回應 Content-Type 為 text/html 但內容其實是 Big5 CSV,
-    列尾常有多餘逗號;依標題名稱取欄位。回傳 [(date, pcoi)]。"""
-    text = content.decode("big5", errors="replace")
-    rows = list(csv.reader(io.StringIO(text)))
-    # 找標題列(含「日期」)
-    hidx = next((i for i, r in enumerate(rows) if any("日期" in c for c in r)), None)
-    if hidx is None:
-        return []  # 非 CSV(多半為過大區間的錯誤 HTML 頁)
-    header = [h.strip() for h in rows[hidx]]
-
-    def find(*keys):
-        for i, h in enumerate(header):
-            if all(k in h for k in keys):
-                return i
-        return None
-
-    i_date, i_call, i_put, i_ratio = find("日期"), find("買權", "未平倉"), find("賣權", "未平倉"), find("未平倉", "比")
-    if i_date is None or (i_ratio is None and (i_call is None or i_put is None)):
-        return []
-    out = []
-    for row in rows[hidx + 1:]:
-        if len(row) <= i_date:
+def _parse_pcr_html(content):
+    """解析 pcRatio 顯示頁回傳的 HTML 表格 → [(date, pcoi)]。
+    依標題欄位名稱定位 日期 / 買權未平倉量 / 賣權未平倉量 / 未平倉比率。"""
+    text = None
+    for enc in ("utf-8", "big5", "cp950"):
+        try:
+            text = content.decode(enc)
+            break
+        except UnicodeDecodeError:
             continue
-        d = norm_date(row[i_date])
-        if not d:
+    if text is None:
+        text = content.decode("big5", errors="replace")
+    p = _TableParser()
+    p.feed(text)
+
+    best = []
+    for rows in p.tables:
+        hidx = next((i for i, r in enumerate(rows) if any("日期" in c for c in r)), None)
+        if hidx is None:
             continue
-        g = lambda i: row[i] if i is not None and len(row) > i else None
-        v = _row_to_pcoi(d, g(i_call), g(i_put), g(i_ratio))
-        if v is not None:
-            out.append((d, v))
-    return out
+        header = rows[hidx]
+
+        def find(*keys):
+            for i, h in enumerate(header):
+                hh = h.replace("\n", "").replace(" ", "")
+                if all(k in hh for k in keys):
+                    return i
+            return None
+
+        i_date, i_call, i_put, i_ratio = find("日期"), find("買權", "未平倉"), find("賣權", "未平倉"), find("未平倉", "比")
+        if i_date is None or (i_ratio is None and (i_call is None or i_put is None)):
+            continue
+        out = []
+        for row in rows[hidx + 1:]:
+            if len(row) <= i_date:
+                continue
+            d = norm_date(row[i_date])
+            if not d:
+                continue
+            g = lambda i: row[i] if i is not None and len(row) > i else None
+            v = _row_to_pcoi(d, g(i_call), g(i_put), g(i_ratio))
+            if v is not None:
+                out.append((d, v))
+        if len(out) > len(best):
+            best = out
+    return best
 
 
 def load_pcr_down():
-    """分段(~150 天視窗)抓取 TAIFEX pcRatioDown,累積歷年資料。"""
+    """分段(~120 天視窗)POST pcRatio 顯示頁,解析 HTML 表格累積歷年資料。"""
     import time
-    WINDOW = 150
+    WINDOW = 120
     acc = {}
     cur = START_DT
     now = datetime.now(timezone.utc)
-    windows = 0
+    windows = ok = 0
     while cur < now:
         nxt = min(cur + timedelta(days=WINDOW), now)
         try:
             r = requests.post(
-                TAIFEX_DOWN,
-                data={"down": "", "queryStartDate": cur.strftime("%Y/%m/%d"),
+                TAIFEX_PAGE,
+                data={"queryStartDate": cur.strftime("%Y/%m/%d"),
                       "queryEndDate": nxt.strftime("%Y/%m/%d")},
-                headers={**UA, "Referer": "https://www.taifex.com.tw/cht/3/pcRatio",
-                         "Content-Type": "application/x-www-form-urlencoded"},
+                headers={**UA, "Referer": TAIFEX_PAGE},
                 timeout=90,
             )
             r.raise_for_status()
-            for d, v in _parse_pcr_csv(r.content):
+            rows = _parse_pcr_html(r.content)
+            for d, v in rows:
                 acc[d] = v
+            if rows:
+                ok += 1
         except Exception as e:
             print(f"[pcr] window {cur:%Y-%m-%d}..{nxt:%Y-%m-%d} failed: {e}", file=sys.stderr)
         windows += 1
@@ -166,8 +220,8 @@ def load_pcr_down():
         time.sleep(0.4)
     out = sorted(acc.items())
     if not out:
-        raise ValueError("pcRatioDown parsed 0 rows across all windows")
-    print(f"[pcr] TAIFEX CSV P/C(OI): {len(out)} rows over {windows} windows; latest {out[-1]}")
+        raise ValueError(f"pcRatio page parsed 0 rows across {windows} windows")
+    print(f"[pcr] TAIFEX page P/C(OI): {len(out)} rows ({ok}/{windows} windows ok); latest {out[-1]}")
     return out
 
 
