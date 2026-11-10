@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Fetch TAIFEX TXO Put/Call open-interest ratio from FinMind, backtest每個門檻
-跌破後的 5 日 / 10 日 TAIEX 報酬,並導出動態警戒線與建議,寫入 pcr.json.
+"""抓台指選擇權(TXO) Put/Call 未平倉比,回測每個門檻「跌破後」的 5 日 / 10 日
+加權指數報酬,導出動態警戒線與建議,寫入 pcr.json.
 
-資料源 (FinMind):
-  - Put/Call 未平倉比: 嘗試 TaiwanPutCallRatio 等資料集,取 OI ratio 欄位。
-  - TAIEX 指數: TaiwanStockTotalReturnIndex (data_id=TAIEX) 作為前瞻報酬基準。
+資料源:
+  - Put/Call 未平倉比: 台灣期交所 (TAIFEX) 官方 pcRatio 下載檔(買權/賣權未平倉量,
+    自行計算 賣權OI / 買權OI = Put/Call 未平倉比)。這是最原始的權威來源;FinMind
+    並未提供對應資料集(所有候選名稱皆回 422),故直接取用期交所公開檔(免 token)。
+  - 加權指數(TAIEX): FinMind TaiwanStockTotalReturnIndex(data_id=TAIEX);
+    若無資料則改用 Yahoo ^TWII 日線作為前瞻報酬基準。
 
-門檻以 P/C 自身的分位數 (p10..p90) 建立 → 單位不敏感;「跌破」= 由上向下
-穿越門檻。動態警戒線 = 在樣本數足夠的門檻中,跌破後 10 日平均報酬最差者
-(偏空警戒) 與最佳者 (偏多機會),每次執行重算 → 即「動態」。
+門檻以 P/C 自身分位數(p10..p90)建立 → 單位不敏感;「跌破」= 由上向下穿越門檻。
+動態警戒線 = 樣本足夠的門檻中,跌破後 10 日平均報酬最差者(偏空警戒)與最佳者
+(偏多機會),每次執行重算 → 即「動態」。
 """
+import csv
+import io
 import json
 import os
 import sys
@@ -17,85 +22,149 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-API = "https://api.finmindtrade.com/api/v4/data"
 OUT = os.path.join(os.path.dirname(__file__), "..", "pcr.json")
 TOKEN = os.environ.get("FINMIND_TOKEN", "").strip()
-START = (datetime.now(timezone.utc) - timedelta(days=365 * 6)).strftime("%Y-%m-%d")
+YEARS = 6
+START_DT = datetime.now(timezone.utc) - timedelta(days=365 * YEARS)
+START = START_DT.strftime("%Y-%m-%d")
+UA = {"User-Agent": "Mozilla/5.0 (compatible; dashboard-bot/1.0)", "Accept": "*/*"}
 
-PCR_DATASETS = ["TaiwanPutCallRatio", "TaiwanOptionPutCallRatio", "TaiwanTxoPutCallRatio"]
-OI_FIELDS = ["PutCallOpenInterestRatio", "put_call_open_interest_ratio",
-             "PutCallRatioOpenInterest", "OpenInterestPutCallRatio"]
-
-
-def fm(dataset, data_id=""):
-    params = {"dataset": dataset, "start_date": START}
-    if data_id:
-        params["data_id"] = data_id
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    if TOKEN:
-        headers["Authorization"] = f"Bearer {TOKEN}"
-        params["token"] = TOKEN
-    r = requests.get(API, params=params, headers=headers, timeout=60)
-    r.raise_for_status()
-    j = r.json()
-    if j.get("status") not in (200, None) and not j.get("data"):
-        raise ValueError(j.get("msg", "api error"))
-    return j.get("data", [])
+TAIFEX_URL = "https://www.taifex.com.tw/cht/3/pcRatioDown"
+FINMIND_API = "https://api.finmindtrade.com/api/v4/data"
 
 
 def num(x):
     try:
-        v = float(x)
+        if x is None:
+            return None
+        s = str(x).strip().replace(",", "")
+        if s in ("", "-", "--", "N/A"):
+            return None
+        v = float(s)
         return v if v == v else None
     except (TypeError, ValueError):
         return None
 
 
+# ---------- Put/Call 未平倉比: TAIFEX ----------
 def load_pcr():
-    for ds in PCR_DATASETS:
+    """回傳 (source_label, [(date, pc_oi_ratio), ...] sorted)."""
+    start = START_DT.strftime("%Y/%m/%d")
+    end = datetime.now(timezone.utc).strftime("%Y/%m/%d")
+    r = requests.post(
+        TAIFEX_URL,
+        data={"down": "", "queryStartDate": start, "queryEndDate": end},
+        headers={**UA, "Referer": "https://www.taifex.com.tw/cht/3/pcRatio",
+                 "Content-Type": "application/x-www-form-urlencoded"},
+        timeout=90,
+    )
+    r.raise_for_status()
+    # TAIFEX 檔為 Big5
+    text = None
+    for enc in ("big5", "cp950", "utf-8-sig", "utf-8"):
         try:
-            rows = fm(ds)
-        except Exception as e:
-            print(f"[pcr] {ds}: {e}", file=sys.stderr)
+            text = r.content.decode(enc)
+            break
+        except UnicodeDecodeError:
             continue
-        if not rows:
+    if text is None:
+        text = r.content.decode("big5", errors="ignore")
+
+    rows = list(csv.reader(io.StringIO(text)))
+    if not rows:
+        raise ValueError("TAIFEX returned no rows")
+    header = [h.strip() for h in rows[0]]
+
+    def find(*keys):
+        for i, h in enumerate(header):
+            if all(k in h for k in keys):
+                return i
+        return None
+
+    i_date = find("日期")
+    i_call_oi = find("買權", "未平倉")
+    i_put_oi = find("賣權", "未平倉")
+    i_ratio = find("未平倉", "比率")
+    if i_date is None or (i_ratio is None and (i_call_oi is None or i_put_oi is None)):
+        raise ValueError(f"TAIFEX header unrecognized: {header}")
+
+    out = []
+    for row in rows[1:]:
+        if len(row) <= i_date:
             continue
-        keys = rows[0].keys()
-        fld = next((f for f in OI_FIELDS if f in keys), None)
-        if fld is None:
-            # any key containing open interest + ratio
-            fld = next((k for k in keys if "open" in k.lower() and "ratio" in k.lower()), None)
-        if fld is None:
-            print(f"[pcr] {ds} has no OI-ratio field; keys={list(keys)}", file=sys.stderr)
+        d = row[i_date].strip().replace("/", "-")
+        if len(d) != 10 or not d[:4].isdigit():
             continue
-        out = []
-        for r in rows:
-            d, v = r.get("date"), num(r.get(fld))
-            if d and v is not None:
-                out.append((d, v))
-        out.sort()
-        if out:
-            print(f"[pcr] using {ds}.{fld}; {len(out)} rows; latest {out[-1]}")
-            return ds, fld, out
-    return None, None, []
+        ratio = None
+        # 優先自行計算 賣權OI / 買權OI,避免比率欄位定義/單位差異
+        if i_call_oi is not None and i_put_oi is not None and len(row) > max(i_call_oi, i_put_oi):
+            c, p = num(row[i_call_oi]), num(row[i_put_oi])
+            if c and c > 0 and p is not None:
+                ratio = p / c
+        if ratio is None and i_ratio is not None and len(row) > i_ratio:
+            rv = num(row[i_ratio])
+            if rv is not None:
+                ratio = rv / 100 if rv > 5 else rv  # %→倍
+        if ratio is not None:
+            out.append((d, ratio))
+    out.sort()
+    if not out:
+        raise ValueError("TAIFEX parsed 0 usable rows")
+    print(f"[pcr] TAIFEX P/C(OI): {len(out)} rows; latest {out[-1]}")
+    return "台灣期交所 TAIFEX Put/Call 未平倉比", out
+
+
+# ---------- TAIEX 指數 ----------
+def load_taiex_finmind():
+    params = {"dataset": "TaiwanStockTotalReturnIndex", "data_id": "TAIEX", "start_date": START}
+    headers = dict(UA)
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
+        params["token"] = TOKEN
+    try:
+        r = requests.get(FINMIND_API, params=params, headers=headers, timeout=60)
+        j = r.json()
+        data = j.get("data", []) if isinstance(j, dict) else []
+    except Exception as e:
+        print(f"[pcr] finmind taiex: {e}", file=sys.stderr)
+        return {}
+    m = {}
+    for row in data:
+        d = row.get("date")
+        c = num(row.get("price") or row.get("close") or row.get("index") or row.get("value"))
+        if d and c and c > 0:
+            m[d] = c
+    if m:
+        print(f"[pcr] TAIEX via FinMind: {len(m)} days")
+    return m
+
+
+def load_taiex_yahoo():
+    url = ("https://query1.finance.yahoo.com/v8/finance/chart/%5ETWII"
+           f"?period1={int(START_DT.timestamp())}&period2={int(datetime.now(timezone.utc).timestamp())}"
+           "&interval=1d")
+    try:
+        r = requests.get(url, headers=UA, timeout=60)
+        j = r.json()
+        res = j["chart"]["result"][0]
+        ts = res["timestamp"]
+        cl = res["indicators"]["quote"][0]["close"]
+    except Exception as e:
+        print(f"[pcr] yahoo taiex: {e}", file=sys.stderr)
+        return {}
+    m = {}
+    for t, c in zip(ts, cl):
+        if c is None:
+            continue
+        d = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d")
+        m[d] = c
+    if m:
+        print(f"[pcr] TAIEX via Yahoo ^TWII: {len(m)} days")
+    return m
 
 
 def load_taiex():
-    for did in ["TAIEX", "TPEx"][:1]:
-        try:
-            rows = fm("TaiwanStockTotalReturnIndex", did)
-        except Exception as e:
-            print(f"[pcr] taiex {did}: {e}", file=sys.stderr)
-            rows = []
-        m = {}
-        for r in rows:
-            d = r.get("date")
-            c = num(r.get("price") or r.get("close") or r.get("index") or r.get("value"))
-            if d and c and c > 0:
-                m[d] = c
-        if m:
-            return m
-    return {}
+    return load_taiex_finmind() or load_taiex_yahoo()
 
 
 def pctile(sorted_vals, p):
@@ -106,47 +175,51 @@ def pctile(sorted_vals, p):
 
 
 def main():
-    ds, fld, pcr = load_pcr()
-    if not pcr:
-        print("[pcr] no P/C ratio data parsed; leaving file untouched", file=sys.stderr)
-        sys.exit(1)
+    source, pcr = load_pcr()
     taiex = load_taiex()
     tdates = sorted(taiex.keys())
     tidx = {d: i for i, d in enumerate(tdates)}
 
-    vals = [v for _, v in pcr]
-    sv = sorted(vals)
-
     def fwd(date, n):
+        # 以 P/C 日期之後、指數序列中最接近的交易日為基準
         i = tidx.get(date)
-        if i is None or i + n >= len(tdates):
+        if i is None:
+            # 找 >= date 的第一個指數日
+            import bisect
+            j = bisect.bisect_left(tdates, date)
+            if j >= len(tdates):
+                return None
+            i = j
+        if i + n >= len(tdates):
             return None
         a, b = taiex[tdates[i]], taiex[tdates[i + n]]
         return (b / a - 1) * 100 if a else None
 
-    # backtest每個分位門檻的「跌破」事件
+    vals = [v for _, v in pcr]
+    sv = sorted(vals)
+
     bt = []
     for p in range(10, 91, 10):
         thr = pctile(sv, p)
         r5, r10 = [], []
         for k in range(1, len(pcr)):
-            if pcr[k][1] < thr and pcr[k - 1][1] >= thr:   # 跌破
+            if pcr[k][1] < thr and pcr[k - 1][1] >= thr:  # 跌破
                 f5, f10 = fwd(pcr[k][0], 5), fwd(pcr[k][0], 10)
                 if f5 is not None:
                     r5.append(f5)
                 if f10 is not None:
                     r10.append(f10)
-        row = {
+        bt.append({
             "level": round(thr, 3), "pctile": p, "n": len(r10),
             "avg5": round(sum(r5) / len(r5), 2) if r5 else None,
             "win5": round(sum(1 for x in r5 if x > 0) / len(r5) * 100, 0) if r5 else None,
             "avg10": round(sum(r10) / len(r10), 2) if r10 else None,
             "win10": round(sum(1 for x in r10 if x > 0) / len(r10) * 100, 0) if r10 else None,
-        }
-        bt.append(row)
+        })
 
     usable = [r for r in bt if r["n"] >= 8 and r["avg10"] is not None] or \
-             [r for r in bt if r["n"] >= 5 and r["avg10"] is not None]
+             [r for r in bt if r["n"] >= 5 and r["avg10"] is not None] or \
+             [r for r in bt if r["n"] >= 3 and r["avg10"] is not None]
     warn = min(usable, key=lambda r: r["avg10"]) if usable else None
     opp = max(usable, key=lambda r: r["avg10"]) if usable else None
 
@@ -155,16 +228,18 @@ def main():
 
     reco = f"目前 P/C(未平倉)={cur:.3f}(歷史分位 {cur_pct:.0f}%)。"
     if warn:
-        reco += f" 回測:跌破警戒線 {warn['level']}(p{warn['pctile']})後 10 日平均 {warn['avg10']:+.2f}%(勝率 {warn['win10']:.0f}%、樣本 {warn['n']})。"
+        reco += (f" 回測:跌破警戒線 {warn['level']}(p{warn['pctile']})後 10 日平均 "
+                 f"{warn['avg10']:+.2f}%(勝率 {warn['win10']:.0f}%、樣本 {warn['n']})。")
         if cur <= warn["level"]:
             reco += " 目前已處警戒區,偏空留意。"
     if opp and opp is not warn:
-        reco += f" 跌破機會線 {opp['level']}(p{opp['pctile']})後 10 日平均 {opp['avg10']:+.2f}%(勝率 {opp['win10']:.0f}%)。"
+        reco += (f" 跌破機會線 {opp['level']}(p{opp['pctile']})後 10 日平均 "
+                 f"{opp['avg10']:+.2f}%(勝率 {opp['win10']:.0f}%)。")
     reco += " ※ 統計傾向非保證,樣本有限時參考性較低。"
 
     payload = {
-        "source": "FinMind TAIFEX TXO Put/Call open-interest ratio + TAIEX",
-        "dataset_used": f"{ds}.{fld}",
+        "source": source,
+        "dataset_used": f"{source} · 加權指數前瞻報酬基準({len(tdates)} 交易日)",
         "updated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "latest": {"date": pcr[-1][0], "pcoi": round(cur, 3), "pctile": cur_pct},
         "series": [{"date": d, "pcoi": round(v, 3)} for d, v in pcr[-600:]],
@@ -178,7 +253,7 @@ def main():
         json.dump(payload, f, ensure_ascii=False, indent=2)
         f.write("\n")
     print(f"[pcr] wrote {len(payload['series'])} pts; warn={warn['level'] if warn else None} "
-          f"opp={opp['level'] if opp else None}")
+          f"opp={opp['level'] if opp else None}; taiex_days={len(tdates)}")
 
 
 if __name__ == "__main__":
