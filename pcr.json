@@ -1,11 +1,190 @@
 {
-  "source": "FinMind TAIFEX TXO Put/Call open-interest ratio + TAIEX",
-  "updated": "pending",
-  "note": "populated by .github/workflows/pcr.yml on first run",
-  "latest": null,
-  "series": [],
-  "backtest": [],
-  "warn": null,
-  "opp": null,
-  "reco": ""
+  "source": "台灣期交所 TAIFEX Put/Call 未平倉比",
+  "dataset_used": "台灣期交所 TAIFEX Put/Call 未平倉比 · 加權指數前瞻報酬基準(1455 交易日)",
+  "updated": "2026-11-10",
+  "latest": {
+    "date": "2026-11-09",
+    "pcoi": 0.512,
+    "pctile": 26.0
+  },
+  "series": [
+    {
+      "date": "2026-10-12",
+      "pcoi": 0.848
+    },
+    {
+      "date": "2026-10-13",
+      "pcoi": 0.689
+    },
+    {
+      "date": "2026-10-14",
+      "pcoi": 0.744
+    },
+    {
+      "date": "2026-10-15",
+      "pcoi": 0.608
+    },
+    {
+      "date": "2026-10-16",
+      "pcoi": 0.676
+    },
+    {
+      "date": "2026-10-19",
+      "pcoi": 0.616
+    },
+    {
+      "date": "2026-10-20",
+      "pcoi": 0.662
+    },
+    {
+      "date": "2026-10-21",
+      "pcoi": 0.629
+    },
+    {
+      "date": "2026-10-22",
+      "pcoi": 0.662
+    },
+    {
+      "date": "2026-10-27",
+      "pcoi": 0.62
+    },
+    {
+      "date": "2026-10-28",
+      "pcoi": 0.694
+    },
+    {
+      "date": "2026-10-29",
+      "pcoi": 0.645
+    },
+    {
+      "date": "2026-10-30",
+      "pcoi": 0.626
+    },
+    {
+      "date": "2026-11-02",
+      "pcoi": 0.616
+    },
+    {
+      "date": "2026-11-03",
+      "pcoi": 0.478
+    },
+    {
+      "date": "2026-11-04",
+      "pcoi": 0.494
+    },
+    {
+      "date": "2026-11-05",
+      "pcoi": 0.441
+    },
+    {
+      "date": "2026-11-06",
+      "pcoi": 0.397
+    },
+    {
+      "date": "2026-11-09",
+      "pcoi": 0.512
+    }
+  ],
+  "backtest": [
+    {
+      "level": 0.478,
+      "pctile": 10,
+      "n": 0,
+      "avg5": null,
+      "win5": null,
+      "avg10": null,
+      "win10": null
+    },
+    {
+      "level": 0.512,
+      "pctile": 20,
+      "n": 0,
+      "avg5": null,
+      "win5": null,
+      "avg10": null,
+      "win10": null
+    },
+    {
+      "level": 0.608,
+      "pctile": 30,
+      "n": 0,
+      "avg5": null,
+      "win5": null,
+      "avg10": null,
+      "win10": null
+    },
+    {
+      "level": 0.616,
+      "pctile": 40,
+      "n": 1,
+      "avg5": -4.62,
+      "win5": 0.0,
+      "avg10": -4.36,
+      "win10": 0.0
+    },
+    {
+      "level": 0.626,
+      "pctile": 50,
+      "n": 2,
+      "avg5": -3.71,
+      "win5": 25.0,
+      "avg10": -6.32,
+      "win10": 0.0
+    },
+    {
+      "level": 0.645,
+      "pctile": 60,
+      "n": 3,
+      "avg5": -4.67,
+      "win5": 20.0,
+      "avg10": -9.32,
+      "win10": 0.0
+    },
+    {
+      "level": 0.662,
+      "pctile": 70,
+      "n": 2,
+      "avg5": -4.48,
+      "win5": 25.0,
+      "avg10": -6.32,
+      "win10": 0.0
+    },
+    {
+      "level": 0.676,
+      "pctile": 80,
+      "n": 2,
+      "avg5": -3.95,
+      "win5": 33.0,
+      "avg10": -6.32,
+      "win10": 0.0
+    },
+    {
+      "level": 0.694,
+      "pctile": 90,
+      "n": 2,
+      "avg5": -5.52,
+      "win5": 0.0,
+      "avg10": -4.22,
+      "win10": 0.0
+    }
+  ],
+  "warn": {
+    "level": 0.645,
+    "pctile": 60,
+    "n": 3,
+    "avg5": -4.67,
+    "win5": 20.0,
+    "avg10": -9.32,
+    "win10": 0.0
+  },
+  "opp": {
+    "level": 0.645,
+    "pctile": 60,
+    "n": 3,
+    "avg5": -4.67,
+    "win5": 20.0,
+    "avg10": -9.32,
+    "win10": 0.0
+  },
+  "reco": "目前 P/C(未平倉)=0.512(歷史分位 26%)。 回測:跌破警戒線 0.645(p60)後 10 日平均 -9.32%(勝率 0%、樣本 3)。 目前已處警戒區,偏空留意。 ※ 統計傾向非保證,樣本有限時參考性較低。"
 }
