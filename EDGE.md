@@ -16,7 +16,18 @@
 > 而且每筆要先付約 4 點成本（小台：手續費 + 期交稅 + 滑價各兩邊）。若要做二元型態的報酬，對應的是 TXO 週選（價外買權≈二元機率），
 > 那需要選擇權報價，目前不在本引擎內。
 
-## 使用
+## 網頁版（手機 / 電腦）：`backtest.html`
+
+1. 開 `backtest.html`（部署後網址為 `https://<你的站>/backtest.html`），在 ① 貼上 FinMind **sponsor** Token → 按「檢查權限」。
+2. ② 選日期區間（建議 ≥ 半年）與商品：「只抓 TX」較快，「TX + 小台 + 微台」才有完整散戶流向。也可以上傳 1 分 K CSV，或用示範資料。
+3. ③ 調整回合、決策點、門檻、契約與成本 → ▶ 開始回測。
+4. ④ 報告可下載 HTML（含圖）、交易 CSV、JSON，或列印成 PDF。
+
+- 計算核心 `js/edge-core.js` 與 `edge_engine.py` 結果一致（`node tests/edge-parity.js`）。
+- Token 只存在該裝置的瀏覽器裡，由瀏覽器直連 FinMind。
+- 下載過的日子會壓縮成 1 分 K 存在 IndexedDB，之後重跑或換參數都是秒算。可以分幾次下載，按「停止」也不會遺失已下載的部分。
+
+## Python 使用
 
 ```bash
 pip install requests numpy

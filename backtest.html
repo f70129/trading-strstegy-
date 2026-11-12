@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>台指機率優勢回測</title>
+<meta name="theme-color" content="#0a0e1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="優勢回測">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="js/smartmoney-core.js"></script>
+<script src="js/edge-core.js"></script>
+<style>
+:root{--bg:#0a0e1a;--panel:#111827;--panel2:#0d1422;--border:#1f2d40;--accent:#00d4ff;--green:#00ff88;--red:#ff4d6d;--amber:#ffb020;--text:#e2e8f0;--muted:#8a9bb3}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;font-size:14px;line-height:1.5}
+.wrap{max-width:1100px;margin:0 auto;padding:16px;padding-bottom:calc(32px + env(safe-area-inset-bottom))}
+h1{font-size:20px;margin:0}
+h2{font-size:15px;margin:0 0 10px;color:var(--accent)}
+.sub{color:var(--muted);font-size:12px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:14px}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+label.f{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+input,select{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px 10px;font-size:15px;font-family:inherit}
+input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:14px;font-family:inherit;cursor:pointer;min-height:42px}
+button.primary{background:var(--accent);color:#001018;border-color:var(--accent);font-weight:700}
+button:disabled{opacity:.45;cursor:not-allowed}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.kpi{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px}
+.kpi .l{color:var(--muted);font-size:11px}
+.kpi .v{font-size:19px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.pos{color:var(--green)}.neg{color:var(--red)}
+.verdict{padding:12px;border-radius:8px;font-weight:700}
+.verdict.ok{background:#00ff8814;border:1px solid #00ff8855}
+.verdict.no{background:#ff4d6d14;border:1px solid #ff4d6d55}
+.verdict ul{margin:6px 0 0;padding-left:18px;font-weight:400;color:var(--muted)}
+.warn{background:#ffb02014;border:1px solid #ffb02055;color:#ffd27a;padding:10px;border-radius:8px;font-size:13px}
+.msg{padding:8px 10px;border-radius:6px;font-size:13px;margin-top:8px}
+.msg.ok{background:#00ff8814;color:var(--green)}.msg.err{background:#ff4d6d14;color:#ff9aac}.msg.info{background:#00d4ff14;color:var(--accent)}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:6px 8px;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:500;font-size:12px}
+tr.sel td{background:#00d4ff14}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.two>*{min-width:0}
+@media(max-width:760px){.two{grid-template-columns:minmax(0,1fr)}.wrap{padding:12px}}
+.chart{position:relative;height:260px}
+.bar{height:10px;border-radius:3px}
+.prog{height:8px;background:var(--panel2);border-radius:4px;overflow:hidden;margin-top:10px}
+.prog > div{height:100%;width:0;background:var(--accent);transition:width .2s}
+pre.log{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:8px;max-height:180px;overflow:auto;font-size:11px;color:var(--muted);white-space:pre-wrap;margin:10px 0 0}
+details summary{cursor:pointer;color:var(--accent);margin:10px 0 6px}
+.hidden{display:none}
+.how{color:var(--muted);line-height:1.7;font-size:13px}
+.how b{color:var(--text)}
+code{background:var(--panel2);padding:1px 5px;border-radius:4px}
+@media print{body{background:#fff;color:#000}.noprint{display:none!important}.panel{border-color:#ccc;background:#fff}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="justify-content:space-between">
+    <div><h1>🎯 台指期機率優勢回測</h1>
+      <div class="sub">回合 Price to Beat · 多空訊號節點 · 類比路徑機率 · 扣成本優勢 · walk-forward 樣本外檢驗。全部在你的瀏覽器裡計算。</div></div>
+  </div>
+
+  <!-- 1. Token -->
+  <div class="panel noprint">
+    <h2>① FinMind Token（sponsor 方案）</h2>
+    <div class="row">
+      <input id="token" type="password" placeholder="貼上 FinMind sponsor token" autocomplete="off" style="flex:1;min-width:220px">
+      <button id="btnShow" type="button">顯示</button>
+      <button id="btnSaveTok" type="button">儲存</button>
+      <button id="btnCheck" type="button">檢查權限</button>
+    </div>
+    <div class="sub" style="margin-top:6px">Token 只存在這台裝置的瀏覽器裡（和聰明錢看板共用），由瀏覽器直接連 FinMind，不會經過其他伺服器。</div>
+    <div id="tokMsg"></div>
+  </div>
+
+  <!-- 2. 資料 -->
+  <div class="panel noprint">
+    <h2>② 資料</h2>
+    <div class="form">
+      <div><label class="f">資料來源</label>
+        <select id="src"><option value="finmind">FinMind 逐筆（sponsor）</option><option value="csv">上傳 1 分 K CSV</option><option value="demo">示範合成資料</option></select></div>
+      <div class="srcFm"><label class="f">開始日</label><input id="dStart" type="date"></div>
+      <div class="srcFm"><label class="f">結束日</label><input id="dEnd" type="date"></div>
+      <div class="srcFm"><label class="f">商品</label>
+        <select id="mode"><option value="tx">只抓大台 TX（快，含大單流向）</option><option value="all">TX + 小台 + 微台（完整散戶流向，慢 3 倍）</option></select></div>
+      <div class="srcCsv hidden" style="grid-column:1/-1"><label class="f">CSV 檔（datetime,open,high,low,close,volume；只取日盤 08:45–13:45）</label><input id="csvFile" type="file" accept=".csv,text/csv"></div>
+    </div>
+    <div class="sub srcFm" id="estimate" style="margin-top:8px"></div>
+    <div class="row srcFm" style="margin-top:8px">
+      <span class="sub" id="cacheInfo">快取：—</span>
+      <button id="btnClearCache" type="button">清除快取</button>
+    </div>
+  </div>
+
+  <!-- 3. 參數 -->
+  <div class="panel noprint">
+    <h2>③ 策略參數</h2>
+    <div class="form">
+      <div><label class="f">回合長度（分）</label><select id="pRound"><option>15</option><option>30</option><option selected>60</option><option>90</option><option>150</option><option>300</option></select></div>
+      <div><label class="f">決策點（回合內第幾分，逗號分隔）</label><input id="pDec" value="15,30,45"></div>
+      <div><label class="f">進場門檻 |P − 0.5| ≥</label><input id="pTh" type="number" step="0.01" min="0" max="0.4" value="0.05"></div>
+      <div><label class="f">契約</label><select id="pContract"><option value="TX">大台 TX（200 元/點）</option><option value="MTX" selected>小台 MTX（50 元/點）</option><option value="TMF">微台 TMF（10 元/點）</option></select></div>
+      <div><label class="f">單邊手續費（元/口）</label><input id="pFee" type="number" step="1" min="0" value="25"></div>
+      <div><label class="f">單邊滑價（點）</label><input id="pSlip" type="number" step="0.5" min="0" value="1"></div>
+    </div>
+    <details><summary>進階</summary>
+      <div class="form">
+        <div><label class="f">最少訓練天數</label><input id="pMinTrain" type="number" min="20" value="60"></div>
+        <div><label class="f">每幾天重訓</label><input id="pRefit" type="number" min="5" value="20"></div>
+        <div><label class="f">類比路徑數 K</label><input id="pK" type="number" min="10" value="60"></div>
+        <div><label class="f">kNN 權重（0 = 只用邏輯迴歸）</label><input id="pKw" type="number" step="0.1" min="0" max="1" value="0.5"></div>
+        <div><label class="f">L2 懲罰</label><input id="pL2" type="number" step="0.5" min="0" value="1"></div>
+        <div><label class="f">流向累計視窗（分）</label><input id="pFlow" type="number" min="1" value="10"></div>
+      </div>
+    </details>
+    <div class="row" style="margin-top:12px">
+      <button id="btnRun" class="primary" type="button">▶ 開始回測</button>
+      <button id="btnStop" type="button" disabled>■ 停止</button>
+      <span class="sub" id="status"></span>
+    </div>
+    <div class="prog"><div id="progBar"></div></div>
+    <pre class="log" id="log"></pre>
+  </div>
+
+  <!-- 4. 報告 -->
+  <div id="report" class="hidden">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">④ 回測報告</h2>
+        <div class="row noprint">
+          <button id="btnDlHtml" type="button">⬇ 報告 HTML</button>
+          <button id="btnDlCsv" type="button">⬇ 交易 CSV</button>
+          <button id="btnDlJson" type="button">⬇ JSON</button>
+          <button id="btnPrint" type="button">🖨 列印 / PDF</button>
+        </div>
+      </div>
+      <div class="sub" id="meta" style="margin-top:6px"></div>
+      <div id="synthWarn"></div>
+      <div id="verdict" style="margin-top:10px"></div>
+      <div class="grid" id="kpis" style="margin-top:12px"></div>
+    </div>
+    <div class="two">
+      <div class="panel"><h2>機率校準格（Probability Lattice）</h2>
+        <div class="sub">樣本外：模型說 X% 會漲時，實際漲了幾 %。點落在對角線上，機率才可信。</div>
+        <div class="chart"><canvas id="cLattice"></canvas></div></div>
+      <div class="panel"><h2>權益曲線（扣成本，新台幣，每筆 1 口）</h2>
+        <div class="sub">只含 walk-forward 樣本外交易</div>
+        <div class="chart"><canvas id="cEquity"></canvas></div></div>
+    </div>
+    <div class="two">
+      <div class="panel"><h2>門檻表：優勢多大才下單</h2>
+        <div class="sub">事後挑最好的一列等於過度擬合，請看整體趨勢。</div>
+        <div class="scroll"><table id="tTh"></table></div></div>
+      <div class="panel"><h2>訊號節點權重（多 / 空）</h2>
+        <div class="sub">全樣本邏輯迴歸的標準化係數：正值代表數值越大越偏多</div>
+        <div id="weights"></div></div>
+    </div>
+    <div class="panel"><h2>最近交易（樣本外）</h2><div class="scroll"><table id="tTrades"></table></div></div>
+  </div>
+
+  <div class="panel how noprint"><h2>原理與判讀</h2>
+    <b>1. 回合</b>：日盤切成每 N 分鐘一回合，回合開盤價 = Price to Beat。<br>
+    <b>2. 訊號節點</b>：距回合開盤、5 分動能、距當日開盤、VWAP 乖離、區間位置、跳空，再加上逐筆資料算出的大單 / 散戶淨流向。<br>
+    <b>3. 機率</b>：邏輯迴歸，加上「類比路徑」（歷史上最像的 K 個情境裡，往上幾條、往下幾條），兩者平均得到 P(上漲)。<br>
+    <b>4. 優勢</b>：期貨的公平價 = 50%。|P − 0.5| ≥ 門檻才進場，持有到回合結束，並扣掉手續費、期交稅（十萬分之二）和滑價。<br>
+    <b>5. 大數法則</b>：只看樣本外結果。Brier 要 &lt; 0.25（擲硬幣）、t 值 ≥ 2，樣本數也要夠多，才算有優勢。<br>
+    資料量：大台一天的逐筆約數 MB 到十多 MB。第一次跑半年要下載一陣子，下載過的日子會壓縮成 1 分 K 存在瀏覽器，之後就是秒算。手機請保持螢幕開啟。
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const FINMIND = 'https://api.finmindtrade.com/api/v4';
+const LS_P = 'edge_params_v1';
+const fmt = (x, d = 0) => x == null || !Number.isFinite(Number(x)) ? '—' : Number(x).toLocaleString('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (x, d = 1) => x == null ? '—' : (x * 100).toFixed(d) + '%';
+const cls = (x) => x > 0 ? 'pos' : x < 0 ? 'neg' : '';
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
+
+// ---------------- 日誌 / 狀態 ----------------
+const logs = [];
+function log(m) { logs.push(`[${new Date().toLocaleTimeString('zh-TW', { hour12: false })}] ${m}`); if (logs.length > 400) logs.shift(); const el = $('log'); el.textContent = logs.slice(-150).join('\n'); el.scrollTop = el.scrollHeight; }
+function status(t) { $('status').textContent = t; }
+function prog(f) { $('progBar').style.width = `${Math.max(0, Math.min(1, f)) * 100}%`; }
+function msg(id, text, kind) { $(id).innerHTML = text ? `<div class="msg ${kind || 'info'}">${text}</div>` : ''; }
+
+// ---------------- Token ----------------
+$('token').value = lsGet('finmindToken') || '';
+$('btnShow').onclick = () => { const t = $('token'); t.type = t.type === 'password' ? 'text' : 'password'; $('btnShow').textContent = t.type === 'password' ? '顯示' : '隱藏'; };
+$('btnSaveTok').onclick = () => { lsSet('finmindToken', $('token').value.trim()); msg('tokMsg', '已儲存在這台裝置。', 'ok'); };
+const token = () => $('token').value.trim();
+
+async function finmind(params, ms) {
+  const q = new URLSearchParams(params);
+  if (token()) q.set('token', token());
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms || 120000);
+  try {
+    const r = await fetch(`${FINMIND}/data?${q}`, { signal: ctl.signal });
+    const j = await r.json().catch(() => ({}));
+    if (j && (j.status === 200 || Array.isArray(j.data))) return j.data || [];
+    throw new Error(j.msg || j.error || `HTTP ${r.status}`);
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('逾時');
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+const isPermErr = (m) => /illegal|permission|sponsor|level|付費|權限|upgrade/i.test(String(m));
+
+async function tradingDays(start, end) {
+  try {
+    const rows = await finmind({ dataset: 'TaiwanStockTradingDate', start_date: start, end_date: end }, 30000);
+    const d = rows.map((r) => r.date).filter((x) => x >= start && x <= end);
+    if (d.length) return d;
+  } catch (e) { log(`交易日曆取得失敗，改用平日：${e.message}`); }
+  const out = []; const d = new Date(start + 'T00:00:00'), e = new Date(end + 'T00:00:00');
+  for (; d <= e; d.setDate(d.getDate() + 1)) if (d.getDay() % 6) out.push(ymd(d));
+  return out;
+}
+
+$('btnCheck').onclick = async () => {
+  $('btnCheck').disabled = true;
+  try {
+    if (!token()) throw new Error('請先貼上 Token');
+    msg('tokMsg', '檢查中…（會下載一天微台逐筆測試權限）', 'info');
+    const free = await finmind({ dataset: 'TaiwanStockTradingDate', start_date: '2026-01-01', end_date: '2026-01-10' }, 20000);
+    const end = ymd(new Date()); const s = new Date(); s.setDate(s.getDate() - 14);
+    const days = await tradingDays(ymd(s), end);
+    let found = null;
+    for (const d of days.reverse().slice(0, 4)) {
+      const rows = await finmind({ dataset: 'TaiwanFuturesTick', data_id: 'TMF', start_date: d, end_date: d }, 120000);
+      if (rows.length) { found = { d, n: rows.length }; break; }
+    }
+    lsSet('finmindToken', token());
+    msg('tokMsg', found ? `✅ Token 有效，逐筆權限 OK（${found.d} 微台 ${found.n.toLocaleString()} 筆）。Token 已儲存。` : `⚠️ Token 可用（免費資料 ${free.length} 筆），但最近幾天抓不到逐筆，可能資料尚未更新。`, found ? 'ok' : 'info');
+  } catch (e) {
+    msg('tokMsg', isPermErr(e.message) ? `❌ 沒有逐筆權限：${esc(e.message)}。TaiwanFuturesTick 需要 sponsor 方案。` : `❌ ${esc(e.message)}`, 'err');
+  } finally { $('btnCheck').disabled = false; }
+};
+
+// ---------------- IndexedDB 快取（1 分 K） ----------------
+const DB = {
+  db: null,
+  async open() {
+    if (this.db) return this.db;
+    this.db = await new Promise((res) => {
+      try {
+        const rq = indexedDB.open('edge_bars', 1);
+        rq.onupgradeneeded = () => rq.result.createObjectStore('bars');
+        rq.onsuccess = () => res(rq.result);
+        rq.onerror = () => res(null);
+      } catch (_) { res(null); }
+    });
+    return this.db;
+  },
+  async op(mode, fn) {
+    const db = await this.open(); if (!db) return null;
+    return new Promise((res) => {
+      try { const tx = db.transaction('bars', mode); const rq = fn(tx.objectStore('bars')); rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null); }
+      catch (_) { res(null); }
+    });
+  },
+  get(k) { return this.op('readonly', (s) => s.get(k)); },
+  put(k, v) { return this.op('readwrite', (s) => s.put(v, k)); },
+  keys() { return this.op('readonly', (s) => s.getAllKeys()); },
+  clear() { return this.op('readwrite', (s) => s.clear()); },
+};
+async function refreshCache() {
+  const k = (await DB.keys()) || [];
+  const tx = k.filter((x) => x.endsWith('|tx')).length, all = k.filter((x) => x.endsWith('|all')).length;
+  $('cacheInfo').textContent = `快取：大台 ${tx} 天、完整 ${all} 天（存在這台裝置）`;
+}
+$('btnClearCache').onclick = async () => { if (confirm('清除已下載的 1 分 K 快取？')) { await DB.clear(); refreshCache(); } };
+
+// ---------------- 表單 ----------------
+const today = new Date(); const half = new Date(); half.setDate(half.getDate() - 183);
+$('dEnd').value = ymd(today); $('dStart').value = ymd(half);
+function readParams() {
+  const n = (id, d) => { const v = Number($(id).value); return Number.isFinite(v) ? v : d; };
+  const dec = $('pDec').value.split(/[,，\s]+/).map(Number).filter((x) => Number.isFinite(x) && x > 0).sort((a, b) => a - b);
+  const round = n('pRound', 60);
+  const decisions = dec.filter((x) => x < round);
+  if (!decisions.length) throw new Error('決策點必須小於回合長度');
+  return {
+    roundMin: round, decisions, threshold: n('pTh', 0.05), contract: $('pContract').value, feeNtd: n('pFee', 25), slipPts: n('pSlip', 1),
+    minTrainDays: Math.max(20, n('pMinTrain', 60)), refitDays: Math.max(5, n('pRefit', 20)), knnK: Math.max(10, n('pK', 60)),
+    knnWeight: Math.max(0, Math.min(1, n('pKw', 0.5))), l2: Math.max(0, n('pL2', 1)), flowWin: Math.max(1, n('pFlow', 10)),
+  };
+}
+const FORM_IDS = ['src', 'dStart', 'dEnd', 'mode', 'pRound', 'pDec', 'pTh', 'pContract', 'pFee', 'pSlip', 'pMinTrain', 'pRefit', 'pK', 'pKw', 'pL2', 'pFlow'];
+try { const s = JSON.parse(lsGet(LS_P) || '{}'); for (const id of FORM_IDS) if (s[id] != null && id !== 'dEnd') $(id).value = s[id]; } catch (_) {}
+function saveForm() { const s = {}; for (const id of FORM_IDS) s[id] = $(id).value; lsSet(LS_P, JSON.stringify(s)); }
+function onSrc() {
+  const v = $('src').value;
+  document.querySelectorAll('.srcFm').forEach((e) => e.classList.toggle('hidden', v !== 'finmind'));
+  document.querySelectorAll('.srcCsv').forEach((e) => e.classList.toggle('hidden', v !== 'csv'));
+  estimate();
+}
+function estimate() {
+  const s = new Date($('dStart').value + 'T00:00:00'), e = new Date($('dEnd').value + 'T00:00:00');
+  const days = Math.max(0, Math.round((e - s) / 864e5 * 5 / 7 * 0.97));
+  const per = $('mode').value === 'all' ? 3 : 1;
+  const mt = Number($('pMinTrain').value) || 60;
+  $('estimate').innerHTML = `約 <b>${days}</b> 個交易日，需下載約 ${days * per} 次逐筆（已快取的日子不重抓）。` +
+    (days <= mt + 20 ? ` <span class="neg">天數太少：至少要比「最少訓練天數 ${mt}」多 20 天以上，才有樣本外結果。</span>` : ` 樣本外約 ${Math.max(0, days - mt)} 天。`);
+}
+['src', 'dStart', 'dEnd', 'mode', 'pMinTrain'].forEach((id) => $(id).addEventListener('change', () => { onSrc(); saveForm(); }));
+FORM_IDS.forEach((id) => $(id).addEventListener('change', saveForm));
+onSrc(); refreshCache();
+
+// ---------------- 下載資料 ----------------
+let stopFlag = false;
+async function fetchDayBars(date, mode) {
+  const key = `${date}|${mode}`;
+  const hit = await DB.get(key);
+  if (hit) return { bars: hit, cached: true };
+  const prods = mode === 'all' ? ['TX', 'MTX', 'TMF'] : ['TX'];
+  const rows = {};
+  for (const p of prods) {
+    let r = await finmind({ dataset: 'TaiwanFuturesTick', data_id: p, start_date: date, end_date: date }, 180000);
+    if (!r.length) r = await finmind({ dataset: 'TaiwanFuturesTick', data_id: p, date }, 180000).catch(() => []);
+    rows[p] = r;
+  }
+  const trades = SmartMoney.rowsToTrades(rows);
+  const bars = trades.length > 100 ? EdgeCore.compactBars(SmartMoney.buildBars(trades)) : [];
+  if (bars.length >= 30) await DB.put(key, bars);
+  return { bars, cached: false };
+}
+
+async function loadFinmindDays() {
+  if (!token()) throw new Error('請先在 ① 填入 FinMind sponsor Token');
+  const start = $('dStart').value, end = $('dEnd').value;
+  if (!start || !end || start > end) throw new Error('日期區間不正確');
+  const mode = $('mode').value;
+  status('取得交易日曆…');
+  const list = await tradingDays(start, end);
+  log(`交易日 ${list.length} 天（${list[0]} ~ ${list[list.length - 1]}），模式 ${mode === 'all' ? 'TX+MTX+TMF' : '只抓 TX'}`);
+  const res = new Array(list.length);
+  let next = 0, done = 0, dl = 0;
+  const t0 = Date.now();
+  let fatal = null;
+  async function worker() {
+    while (!stopFlag && !fatal && next < list.length) {
+      const i = next++, d = list[i];
+      try {
+        const r = await fetchDayBars(d, mode);
+        res[i] = r.bars.length >= 30 ? { date: d, bars: r.bars, hasFlow: true } : null;
+        if (!r.cached) { dl++; log(`${d} 下載完成：${r.bars.length} 根 1 分 K`); }
+        if (!r.bars.length) log(`${d} 無資料（假日或尚未更新）`);
+      } catch (e) {
+        log(`${d} 失敗：${e.message}`);
+        if (isPermErr(e.message)) fatal = new Error(`FinMind 拒絕：${e.message}（逐筆資料需要 sponsor 方案）`);
+      }
+      done++;
+      const el = (Date.now() - t0) / 1000;
+      const eta = dl ? el / done * (list.length - done) : 0;
+      status(`資料 ${done}/${list.length} 天${eta > 5 ? `，預估剩 ${Math.ceil(eta / 60)} 分` : ''}`);
+      prog(done / list.length * 0.8);
+    }
+  }
+  await Promise.all([worker(), worker()]);
+  if (fatal) throw fatal;
+  if (stopFlag) throw new Error('已停止（已下載的日子都存在快取，下次會直接用）');
+  refreshCache();
+  return res.filter(Boolean);
+}
+
+async function loadDays(params) {
+  const src = $('src').value;
+  if (src === 'demo') return { days: EdgeCore.syntheticDays(300, 21, 0.35), source: '合成資料（示範，非真實行情）' };
+  if (src === 'csv') {
+    const f = $('csvFile').files[0];
+    if (!f) throw new Error('請選擇 CSV 檔');
+    const days = EdgeCore.parseCsvDays(await f.text(), params);
+    return { days, source: `CSV 1 分 K：${f.name}` };
+  }
+  const days = await loadFinmindDays();
+  return { days, source: `FinMind 台指期逐筆（${$('mode').value === 'all' ? 'TX/MTX/TMF' : 'TX'}）→ 1 分 K + 大小單流向` };
+}
+
+// ---------------- 執行 ----------------
+let lastResult = null, wakeLock = null;
+$('btnStop').onclick = () => { stopFlag = true; status('停止中…'); };
+$('btnRun').onclick = async () => {
+  stopFlag = false;
+  $('btnRun').disabled = true; $('btnStop').disabled = false; prog(0);
+  try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
+  try {
+    const params = readParams(); saveForm();
+    const { days, source } = await loadDays(params);
+    log(`可用交易日 ${days.length} 天`);
+    if (days.length <= params.minTrainDays + 5) throw new Error(`可用交易日 ${days.length} 天，不足以做 walk-forward（最少訓練 ${params.minTrainDays} 天 + 樣本外）。請拉長日期或降低「最少訓練天數」。`);
+    status('計算中…');
+    const r = await EdgeCore.runBacktest(days, params, source, async (f) => { prog(0.8 + 0.2 * f); await new Promise((res) => setTimeout(res, 0)); });
+    prog(1);
+    lastResult = r;
+    render(r);
+    status(`完成（計算 ${r.elapsedSec} 秒）`);
+    log(`完成：${r.verdict.label}`);
+    $('report').scrollIntoView({ behavior: 'smooth' });
+  } catch (e) {
+    status(''); log('錯誤：' + e.message); alert(e.message);
+  } finally {
+    $('btnRun').disabled = false; $('btnStop').disabled = true;
+    try { if (wakeLock) await wakeLock.release(); } catch (_) {}
+    wakeLock = null;
+  }
+};
+
+// ---------------- 報告 ----------------
+let chL = null, chE = null;
+function kpiList(r) {
+  const st = r.trades || {}, pm = r.probability || {};
+  return [
+    ['樣本外交易數', fmt(st.n)], ['淨勝率', pct(st.winRate)], ['平均淨點數 / 筆', `<span class="${cls(st.avgNetPts)}">${fmt(st.avgNetPts, 2)}</span>`],
+    ['總淨損益（元）', `<span class="${cls(st.totalNetNtd)}">${fmt(st.totalNetNtd)}</span>`], ['t 值', fmt(st.tStat, 2)], ['年化 Sharpe', fmt(st.sharpeAnnual, 2)],
+    ['最大回落（元）', fmt(st.maxDrawdownNtd)], ['獲利因子', fmt(st.profitFactor, 2)], ['Brier 模型 / 硬幣', `${fmt(pm.brierModel, 4)} / 0.25`],
+    ['Brier skill', `<span class="${cls(pm.skill)}">${fmt(pm.skill, 4)}</span>`], ['方向命中率', pct(pm.hitRate)], ['凱利比例', r.kelly == null ? '—' : pct(r.kelly)],
+  ];
+}
+function metaText(r) {
+  return `${r.source} · ${r.range.from} ~ ${r.range.to}（${r.range.days} 天，樣本外 ${r.range.oosDays} 天 / ${fmt(r.oosSamples)} 個決策點）· 契約 ${r.params.contract}（每點 ${r.pointValue} 元）· 來回成本 ${r.costPtsRoundTrip} 點 · 回合 ${r.params.roundMin} 分 · 決策點 ${r.params.decisions.join('/')} 分 · 門檻 ${r.params.threshold} · ${r.updated}`;
+}
+function thHtml(r) {
+  return '<tr><th>門檻</th><th>筆數</th><th>淨勝率</th><th>毛點/筆</th><th>淨點/筆</th><th>總淨(元)</th><th>t</th></tr>' +
+    r.thresholds.map((t) => `<tr class="${t.threshold === r.params.threshold ? 'sel' : ''}"><td>≥ ${t.threshold.toFixed(2)}</td><td>${fmt(t.n)}</td><td>${pct(t.winRate)}</td><td>${fmt(t.avgGrossPts, 2)}</td><td class="${cls(t.avgNetPts)}">${fmt(t.avgNetPts, 2)}</td><td class="${cls(t.totalNetNtd)}">${fmt(t.totalNetNtd)}</td><td>${fmt(t.tStat, 2)}</td></tr>`).join('');
+}
+function weightsHtml(r) {
+  const mx = Math.max(...r.weights.map((w) => Math.abs(w.coef)), 1e-9);
+  return '<table>' + r.weights.map((w) => `<tr><td>${esc(w.label)}</td><td style="width:45%"><div class="bar" style="width:${Math.abs(w.coef) / mx * 100}%;background:${w.coef > 0 ? '#4f8cff' : '#c0573a'}"></div></td><td class="${cls(w.coef)}">${w.coef > 0 ? '+' : ''}${w.coef.toFixed(3)}</td></tr>`).join('') + '</table>';
+}
+function tradesHtml(r) {
+  return '<tr><th>日期</th><th>回合</th><th>進場</th><th>方向</th><th>P(上)</th><th>目標價</th><th>進場價</th><th>出場價</th><th>淨點</th><th>淨(元)</th></tr>' +
+    r.recentTrades.slice().reverse().map((t) => `<tr><td>${t.date}</td><td>${t.round}</td><td>${t.time}</td><td class="${t.side > 0 ? 'pos' : 'neg'}">${t.side > 0 ? '多' : '空'}</td><td>${pct(t.p)}</td><td>${fmt(t.ref)}</td><td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td class="${cls(t.netPts)}">${fmt(t.netPts, 1)}</td><td class="${cls(t.netNtd)}">${fmt(t.netNtd)}</td></tr>`).join('');
+}
+function verdictHtml(r) {
+  const v = r.verdict;
+  return `<div class="verdict ${v.edgeFound ? 'ok' : 'no'}">${v.edgeFound ? '✅' : '⛔'} ${esc(v.label)}<ul>${v.reasons.map((x) => '<li>' + esc(x) + '</li>').join('')}</ul></div>`;
+}
+function render(r) {
+  $('report').classList.remove('hidden');
+  $('meta').textContent = metaText(r);
+  $('synthWarn').innerHTML = /合成/.test(r.source) ? '<div class="warn" style="margin-top:10px">⚠️ 這是<b>合成資料</b>示範（刻意放入可預測成分的正對照組），不是真實行情。</div>' : '';
+  $('verdict').innerHTML = verdictHtml(r);
+  $('kpis').innerHTML = kpiList(r).map(([l, x]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${x}</div></div>`).join('');
+  $('tTh').innerHTML = thHtml(r); $('weights').innerHTML = weightsHtml(r); $('tTrades').innerHTML = tradesHtml(r);
+  if (!window.Chart) return;
+  Chart.defaults.color = '#8a9bb3'; Chart.defaults.borderColor = '#1f2d40';
+  if (chL) chL.destroy(); if (chE) chE.destroy();
+  const L = r.lattice.filter((b) => b.realized != null);
+  chL = new Chart($('cLattice'), { data: { datasets: [
+    { type: 'scatter', label: '實際上漲比例', data: L.map((b) => ({ x: b.predicted, y: b.realized, n: b.n })), backgroundColor: '#00d4ff', pointRadius: L.map((b) => Math.max(3, Math.min(14, Math.sqrt(b.n) / 2))) },
+    { type: 'line', label: '完美校準', data: [{ x: 0.3, y: 0.3 }, { x: 0.7, y: 0.7 }], borderColor: '#8a9bb388', borderDash: [4, 4], pointRadius: 0 }] },
+    options: { animation: false, maintainAspectRatio: false, scales: { x: { type: 'linear', min: 0.3, max: 0.7, title: { display: true, text: '預測 P(上漲)' } }, y: { min: 0.2, max: 0.8, title: { display: true, text: '實際' } } },
+      plugins: { tooltip: { callbacks: { label: (c) => `預測 ${pct(c.raw.x)} → 實際 ${pct(c.raw.y)}（n=${c.raw.n ?? ''}）` } } } } });
+  const E = r.equity;
+  chE = new Chart($('cEquity'), { type: 'line', data: { labels: E.map((e) => e.date), datasets: [{ data: E.map((e) => e.equity), borderColor: '#00ff88', backgroundColor: '#00ff8814', fill: true, pointRadius: 0, borderWidth: 1.5 }] },
+    options: { animation: false, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksLimit: 6 } } } } });
+}
+
+// ---------------- 匯出 ----------------
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+const fname = (ext) => `tx-edge-backtest_${lastResult.range.from}_${lastResult.range.to}.${ext}`;
+$('btnDlJson').onclick = () => { if (lastResult) download(fname('json'), JSON.stringify(lastResult, null, 1), 'application/json'); };
+$('btnDlCsv').onclick = () => {
+  if (!lastResult) return;
+  const rows = [['date', 'round', 'time', 'side', 'pUp', 'priceToBeat', 'entry', 'exit', 'grossPts', 'netPts', 'netNtd']]
+    .concat(lastResult.allTrades.map((t) => [t.date, t.round, t.time, t.side > 0 ? 'long' : 'short', t.p, t.ref, t.entry, t.exit, t.grossPts, t.netPts, t.netNtd]));
+  download(fname('csv'), '﻿' + rows.map((r) => r.join(',')).join('\n'), 'text/csv');
+};
+$('btnPrint').onclick = () => window.print();
+$('btnDlHtml').onclick = () => {
+  if (!lastResult) return;
+  const r = lastResult;
+  const img = (id) => { try { return `<img src="${$(id).toDataURL('image/png')}" style="width:100%;max-width:520px">`; } catch (_) { return ''; } };
+  const css = document.querySelector('style').textContent;
+  const html = `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>台指機率優勢回測報告</title><style>${css}</style></head><body><div class="wrap">
+<h1>🎯 台指期機率優勢回測報告</h1><div class="sub">${esc(metaText(r))}</div>
+${/合成/.test(r.source) ? '<div class="warn" style="margin-top:10px">⚠️ 合成資料示範，非真實行情</div>' : ''}
+<div class="panel">${verdictHtml(r)}<div class="grid" style="margin-top:12px">${kpiList(r).map(([l, x]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${x}</div></div>`).join('')}</div></div>
+<div class="two"><div class="panel"><h2>機率校準格</h2>${img('cLattice')}</div><div class="panel"><h2>權益曲線（元）</h2>${img('cEquity')}</div></div>
+<div class="two"><div class="panel"><h2>門檻表</h2><div class="scroll"><table>${thHtml(r)}</table></div></div><div class="panel"><h2>訊號節點權重</h2>${weightsHtml(r)}</div></div>
+<div class="panel"><h2>最近交易（樣本外）</h2><div class="scroll"><table>${tradesHtml(r)}</table></div></div>
+<div class="panel how"><h2>參數</h2><code>${esc(JSON.stringify(r.params))}</code></div></div></body></html>`;
+  download(fname('html'), html, 'text/html');
+};
+</script>
+</body>
+</html>

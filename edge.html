@@ -32,8 +32,9 @@ th:first-child,td:first-child{text-align:left}
 th{color:var(--muted);font-weight:500;font-size:12px}
 tr.sel td{background:#00d4ff14}
 .scroll{overflow-x:auto}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-@media(max-width:760px){.two{grid-template-columns:1fr}}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.two>*{min-width:0}
+@media(max-width:760px){.two{grid-template-columns:minmax(0,1fr)}}
 .chart{position:relative;height:260px}
 .bar{height:10px;border-radius:3px}
 .how{color:var(--muted);line-height:1.7;font-size:13px}
@@ -80,7 +81,7 @@ a{color:var(--accent)}
     <b>3. 機率</b>：邏輯迴歸，加上「類比路徑」（找歷史上最像的 K 個情境，數幾條往上、幾條往下），兩者平均得到 P(上漲)。<br>
     <b>4. 優勢</b>：期貨的公平價是 50%，|P − 0.5| 超過門檻、而且預期點數能蓋過手續費、期交稅與滑價，才有交易價值。<br>
     <b>5. 大數法則</b>：全部用 walk-forward 樣本外結果。Brier 要勝過 0.25（擲硬幣），t 值 ≥ 2，樣本數也要夠多。<br>
-    執行：<code>python edge_engine.py --backtest 2025-11-01 2026-11-10</code>（FinMind）或 <code>--backtest-csv bars.csv</code>；即時：<code>--live</code>。說明見 EDGE.md。
+    自己跑：手機或電腦開 <a href="backtest.html">backtest.html</a>；或 <code>python edge_engine.py --backtest 2025-11-01 2026-11-10</code>（FinMind）或 <code>--backtest-csv bars.csv</code>；即時：<code>--live</code>。說明見 EDGE.md。
   </div>
 </div>
 <script>
