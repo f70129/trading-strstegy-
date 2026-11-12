@@ -1,6 +1,10 @@
 name: Update TX probability-edge backtest
 
 on:
+  # 功能分支推送時也跑一次（workflow_dispatch 只能觸發預設分支上已存在的 workflow）
+  push:
+    branches: ["claude/pensive-meitner-a7e6v4"]
+    paths: ["edge_engine.py", ".github/workflows/edge.yml"]
   schedule:
     # 每週六 15:17 UTC（台北 23:17）重跑近一年 walk-forward 回測
     - cron: "17 15 * * 6"
@@ -44,7 +48,10 @@ jobs:
           IN_END: ${{ inputs.end }}
           IN_PARAMS: ${{ inputs.params }}
         run: |
-          START="${IN_START:-$(date -u -d '365 days ago' +%F)}"
+          DEF_DAYS=365
+          # push 觸發的首跑用約 7 個月，避免逐筆下載超時（快取建好後再拉長）
+          if [ "${{ github.event_name }}" = "push" ]; then DEF_DAYS=225; fi
+          START="${IN_START:-$(date -u -d "$DEF_DAYS days ago" +%F)}"
           END="${IN_END:-$(date -u +%F)}"
           if [ -n "$IN_PARAMS" ]; then
             python edge_engine.py --backtest "$START" "$END" --params "$IN_PARAMS"
