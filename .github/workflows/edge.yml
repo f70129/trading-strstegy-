@@ -1,0 +1,64 @@
+name: Update TX probability-edge backtest
+
+on:
+  schedule:
+    # 每週六 15:17 UTC（台北 23:17）重跑近一年 walk-forward 回測
+    - cron: "17 15 * * 6"
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "開始日 YYYY-MM-DD（預設一年前）"
+        required: false
+      end:
+        description: "結束日 YYYY-MM-DD（預設今天）"
+        required: false
+      params:
+        description: '參數 JSON，例 {"roundMin":30,"decisions":[10,20]}'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet requests numpy
+      - name: Restore 1-min bar cache
+        uses: actions/cache@v4
+        with:
+          path: data/edge_bars
+          key: edge-bars-${{ github.run_id }}
+          restore-keys: edge-bars-
+      - name: Self-test
+        run: python edge_engine.py --selftest
+      - name: Backtest
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          IN_START: ${{ inputs.start }}
+          IN_END: ${{ inputs.end }}
+          IN_PARAMS: ${{ inputs.params }}
+        run: |
+          START="${IN_START:-$(date -u -d '365 days ago' +%F)}"
+          END="${IN_END:-$(date -u +%F)}"
+          if [ -n "$IN_PARAMS" ]; then
+            python edge_engine.py --backtest "$START" "$END" --params "$IN_PARAMS"
+          else
+            python edge_engine.py --backtest "$START" "$END"
+          fi
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add edge.json
+          if git diff --staged --quiet; then
+            echo "No change in edge backtest."
+          else
+            git commit -m "chore: update TX probability-edge backtest"
+            git push
+          fi

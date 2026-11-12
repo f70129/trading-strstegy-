@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>台指機率優勢回測</title>
+<meta name="theme-color" content="#0a0e1a">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0a0e1a;--panel:#111827;--border:#1f2d40;--accent:#00d4ff;--green:#00ff88;--red:#ff4d6d;--text:#e2e8f0;--muted:#8a9bb3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;font-size:14px}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:0 0 10px;color:var(--accent)}
+.sub{color:var(--muted);font-size:12px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.kpi{background:#0d1422;border:1px solid var(--border);border-radius:8px;padding:10px}
+.kpi .l{color:var(--muted);font-size:11px}
+.kpi .v{font-size:20px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.pos{color:var(--green)}.neg{color:var(--red)}
+.verdict{padding:12px;border-radius:8px;font-weight:700}
+.verdict.ok{background:#00ff8814;border:1px solid #00ff8855}
+.verdict.no{background:#ff4d6d14;border:1px solid #ff4d6d55}
+.verdict ul{margin:6px 0 0;padding-left:18px;font-weight:400;color:var(--muted)}
+.warn{background:#ffb02014;border:1px solid #ffb02055;color:#ffd27a;padding:10px;border-radius:8px;margin-top:10px;font-size:13px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:6px 8px;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:500;font-size:12px}
+tr.sel td{background:#00d4ff14}
+.scroll{overflow-x:auto}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:760px){.two{grid-template-columns:1fr}}
+.chart{position:relative;height:260px}
+.bar{height:10px;border-radius:3px}
+.how{color:var(--muted);line-height:1.7;font-size:13px}
+.how b{color:var(--text)}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎯 台指期機率優勢回測</h1>
+  <div class="sub" id="meta">載入 edge.json…</div>
+  <div id="warn"></div>
+
+  <div class="panel" id="live" style="display:none"></div>
+
+  <div class="panel">
+    <div id="verdict"></div>
+    <div class="grid" id="kpis" style="margin-top:12px"></div>
+  </div>
+
+  <div class="two">
+    <div class="panel"><h2>機率校準格（Probability Lattice）</h2>
+      <div class="sub">樣本外：模型說 X% 會漲時，實際漲了幾 %。點落在對角線上才代表機率可信。</div>
+      <div class="chart"><canvas id="cLattice"></canvas></div></div>
+    <div class="panel"><h2>權益曲線（扣成本，新台幣）</h2>
+      <div class="sub">只含 walk-forward 樣本外交易，每筆 1 口</div>
+      <div class="chart"><canvas id="cEquity"></canvas></div></div>
+  </div>
+
+  <div class="two">
+    <div class="panel"><h2>門檻表：優勢多大才下單</h2>
+      <div class="sub">|P − 0.5| ≥ 門檻才進場。事後挑最好的一列是過度擬合，請看整體趨勢。</div>
+      <div class="scroll"><table id="tTh"></table></div></div>
+    <div class="panel"><h2>訊號節點權重（多 / 空）</h2>
+      <div class="sub">全樣本邏輯迴歸，標準化係數；正 = 數值越大越偏多</div>
+      <div id="weights"></div></div>
+  </div>
+
+  <div class="panel"><h2>最近交易（樣本外）</h2><div class="scroll"><table id="tTrades"></table></div></div>
+
+  <div class="panel how"><h2>原理</h2>
+    <b>1. 回合</b>：日盤切成每 N 分鐘一回合，回合開盤價就是 Price to Beat。<br>
+    <b>2. 訊號節點</b>：在決策點計算距回合開盤、動能、距當日開盤、VWAP 乖離、區間位置、跳空，以及大單 / 散戶流向（有逐筆資料時），每個節點把機率往多或往空推。<br>
+    <b>3. 機率</b>：邏輯迴歸，加上「類比路徑」（找歷史上最像的 K 個情境，數幾條往上、幾條往下），兩者平均得到 P(上漲)。<br>
+    <b>4. 優勢</b>：期貨的公平價是 50%，|P − 0.5| 超過門檻、而且預期點數能蓋過手續費、期交稅與滑價，才有交易價值。<br>
+    <b>5. 大數法則</b>：全部用 walk-forward 樣本外結果。Brier 要勝過 0.25（擲硬幣），t 值 ≥ 2，樣本數也要夠多。<br>
+    執行：<code>python edge_engine.py --backtest 2025-11-01 2026-11-10</code>（FinMind）或 <code>--backtest-csv bars.csv</code>；即時：<code>--live</code>。說明見 EDGE.md。
+  </div>
+</div>
+<script>
+const fmt=(x,d=0)=>x==null?'—':Number(x).toLocaleString('zh-TW',{minimumFractionDigits:d,maximumFractionDigits:d});
+const pct=(x,d=1)=>x==null?'—':(x*100).toFixed(d)+'%';
+const cls=x=>x>0?'pos':x<0?'neg':'';
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+Chart.defaults.color='#8a9bb3';Chart.defaults.borderColor='#1f2d40';
+
+async function load(){
+  let r;
+  try{ r=await (await fetch('edge.json?t='+Date.now())).json(); }
+  catch(e){ document.getElementById('meta').textContent='找不到 edge.json，請先執行 python edge_engine.py --demo 或 --backtest'; return; }
+  const st=r.trades||{}, pm=r.probability||{}, v=r.verdict||{};
+  document.getElementById('meta').textContent=`${r.source} · ${r.range.from} ~ ${r.range.to}（樣本外 ${r.range.oosDays} 天）· 契約 ${r.params.contract}（每點 ${r.pointValue} 元）· 來回成本 ${r.costPtsRoundTrip} 點 · 回合 ${r.params.roundMin} 分 · 決策點 ${r.params.decisions.join('/')} 分 · 更新 ${r.updated}`;
+  if(/合成/.test(r.source)) document.getElementById('warn').innerHTML='<div class="warn">⚠️ 目前顯示的是<b>合成資料</b>示範（刻意放入可預測成分的正對照組），不是真實台指期行情。請用 FinMind 或 CSV 跑真實回測。</div>';
+  document.getElementById('verdict').innerHTML=`<div class="verdict ${v.edgeFound?'ok':'no'}">${v.edgeFound?'✅':'⛔'} ${esc(v.label||'')}<ul>${(v.reasons||[]).map(x=>'<li>'+esc(x)+'</li>').join('')}</ul></div>`;
+  const k=[
+    ['樣本外交易數',fmt(st.n)],['淨勝率',pct(st.winRate)],['平均淨點數 / 筆',`<span class="${cls(st.avgNetPts)}">${fmt(st.avgNetPts,2)}</span>`],
+    ['總淨損益（元）',`<span class="${cls(st.totalNetNtd)}">${fmt(st.totalNetNtd)}</span>`],['t 值',fmt(st.tStat,2)],['年化 Sharpe',fmt(st.sharpeAnnual,2)],
+    ['最大回落（元）',fmt(st.maxDrawdownNtd)],['獲利因子',fmt(st.profitFactor,2)],
+    ['Brier 模型 / 硬幣',`${fmt(pm.brierModel,4)} / 0.25`],['Brier skill',`<span class="${cls(pm.skill)}">${fmt(pm.skill,4)}</span>`],
+    ['方向命中率',pct(pm.hitRate)],['凱利比例',r.kelly==null?'—':pct(r.kelly)],
+  ];
+  document.getElementById('kpis').innerHTML=k.map(([l,x])=>`<div class="kpi"><div class="l">${l}</div><div class="v">${x}</div></div>`).join('');
+
+  const L=r.lattice||[];
+  new Chart(document.getElementById('cLattice'),{data:{datasets:[
+    {type:'scatter',label:'實際上漲比例',data:L.filter(b=>b.realized!=null).map(b=>({x:b.predicted,y:b.realized,n:b.n})),backgroundColor:'#00d4ff',pointRadius:L.map(b=>Math.max(3,Math.min(14,Math.sqrt(b.n)/2)))},
+    {type:'line',label:'完美校準',data:[{x:.3,y:.3},{x:.7,y:.7}],borderColor:'#8a9bb388',borderDash:[4,4],pointRadius:0}]},
+    options:{maintainAspectRatio:false,scales:{x:{type:'linear',min:.3,max:.7,title:{display:true,text:'預測 P(上漲)'}},y:{min:.2,max:.8,title:{display:true,text:'實際'}}},
+      plugins:{tooltip:{callbacks:{label:c=>`預測 ${pct(c.raw.x)} → 實際 ${pct(c.raw.y)}（n=${c.raw.n??''}）`}}}}});
+
+  const E=r.equity||[];
+  new Chart(document.getElementById('cEquity'),{type:'line',data:{labels:E.map(e=>e.date),datasets:[{data:E.map(e=>e.equity),borderColor:'#00ff88',backgroundColor:'#00ff8814',fill:true,pointRadius:0,borderWidth:1.5}]},
+    options:{maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:6}}}}});
+
+  document.getElementById('tTh').innerHTML='<tr><th>門檻</th><th>筆數</th><th>淨勝率</th><th>毛點/筆</th><th>淨點/筆</th><th>總淨(元)</th><th>t</th></tr>'+
+    (r.thresholds||[]).map(t=>`<tr class="${t.threshold===r.params.threshold?'sel':''}"><td>≥ ${t.threshold.toFixed(2)}</td><td>${fmt(t.n)}</td><td>${pct(t.winRate)}</td><td>${fmt(t.avgGrossPts,2)}</td><td class="${cls(t.avgNetPts)}">${fmt(t.avgNetPts,2)}</td><td class="${cls(t.totalNetNtd)}">${fmt(t.totalNetNtd)}</td><td>${fmt(t.tStat,2)}</td></tr>`).join('');
+
+  const W=r.weights||[], mx=Math.max(...W.map(w=>Math.abs(w.coef)),1e-9);
+  document.getElementById('weights').innerHTML='<table>'+W.map(w=>`<tr><td>${esc(w.label)}</td><td style="width:45%"><div class="bar" style="width:${Math.abs(w.coef)/mx*100}%;background:${w.coef>0?'#4f8cff':'#c0573a'}"></div></td><td class="${cls(w.coef)}">${w.coef>0?'+':''}${w.coef.toFixed(3)}</td></tr>`).join('')+'</table>';
+
+  document.getElementById('tTrades').innerHTML='<tr><th>日期</th><th>回合</th><th>進場</th><th>方向</th><th>P(上)</th><th>目標價</th><th>進場價</th><th>出場價</th><th>淨點</th><th>淨(元)</th></tr>'+
+    (r.recentTrades||[]).slice().reverse().map(t=>`<tr><td>${t.date}</td><td>${t.round}</td><td>${t.time}</td><td class="${t.side>0?'pos':'neg'}">${t.side>0?'多':'空'}</td><td>${pct(t.p)}</td><td>${fmt(t.ref)}</td><td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td class="${cls(t.netPts)}">${fmt(t.netPts,1)}</td><td class="${cls(t.netNtd)}">${fmt(t.netNtd)}</td></tr>`).join('');
+}
+
+async function live(){
+  try{
+    const s=await (await fetch('data/edge_live.json?t='+Date.now())).json();
+    if(!s||s.status!=='open') return;
+    const el=document.getElementById('live'); el.style.display='';
+    el.innerHTML=`<h2>即時回合 ${s.round} · ${s.time}（剩 ${s.minutesLeft} 分）</h2><div class="grid">
+      <div class="kpi"><div class="l">Price to Beat</div><div class="v">${fmt(s.priceToBeat)}</div></div>
+      <div class="kpi"><div class="l">現價</div><div class="v ${cls(s.diff)}">${fmt(s.price)}（${s.diff>0?'+':''}${fmt(s.diff)}）</div></div>
+      <div class="kpi"><div class="l">P(上漲)</div><div class="v">${pct(s.pUp)}</div></div>
+      <div class="kpi"><div class="l">類比路徑 多 / 空</div><div class="v"><span class="pos">${s.bullPaths}</span> / <span class="neg">${s.bearPaths}</span></div></div>
+      <div class="kpi"><div class="l">建議</div><div class="v">${esc(s.action)}</div></div></div>
+      <div class="sub" style="margin-top:8px">主因：${s.nodes.slice(0,4).map(n=>`${esc(n.label)} ${n.side==='bull'?'↑':'↓'}`).join('、')} · 更新 ${s.updated}</div>`;
+  }catch(e){}
+}
+load(); live(); setInterval(live,30000);
+</script>
+</body>
+</html>

@@ -26,6 +26,10 @@ python smartmoney_engine.py --selftest      # Python 引擎單元測試
 node tests/parity.js                        # JS ↔ Python 一致性檢核
 ```
 
+## 🎯 機率優勢回測（Polymarket 原理 → 台指期）
+
+開 **`edge.html`**；引擎 `edge_engine.py`。回合 / Price to Beat / 多空訊號節點 / 類比路徑機率 / 扣成本優勢 / walk-forward 大數法則檢驗，詳見 **[EDGE.md](EDGE.md)**。
+
 ## 部署建議
 
 | 平台 | 台股 FinMind | 美股 FRED | 個股搜尋 |

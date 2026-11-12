@@ -1,0 +1,1779 @@
+{
+ "version": "1.0.0",
+ "updated": "2026-11-12 10:14",
+ "source": "合成資料（示範，非真實行情）",
+ "range": {
+  "from": "S0000",
+  "to": "S0299",
+  "days": 300,
+  "oosFrom": "S0065",
+  "oosTo": "S0299",
+  "oosDays": 235
+ },
+ "params": {
+  "sessionStart": "08:45",
+  "sessionEnd": "13:45",
+  "roundMin": 60,
+  "decisions": [
+   15,
+   30,
+   45
+  ],
+  "threshold": 0.05,
+  "contract": "MTX",
+  "feeNtd": 25,
+  "taxRate": 2e-05,
+  "slipPts": 1.0,
+  "sigmaDays": 20,
+  "minHistoryDays": 5,
+  "minTrainDays": 60,
+  "refitDays": 20,
+  "l2": 1.0,
+  "knnK": 60,
+  "knnWeight": 0.5,
+  "flowWin": 10
+ },
+ "costPtsRoundTrip": 3.87,
+ "pointValue": 50,
+ "samples": 4425,
+ "oosSamples": 3525,
+ "features": [
+  "zRef",
+  "mom5",
+  "zDay",
+  "vwapDev",
+  "rangePos",
+  "gap",
+  "flowBig",
+  "flowRetail"
+ ],
+ "probability": {
+  "n": 3491,
+  "baseRateUp": 0.497,
+  "brierCoin": 0.25,
+  "brierModel": 0.24274,
+  "brierLogit": 0.24185,
+  "logLossCoin": 0.69315,
+  "logLossModel": 0.67842,
+  "hitRate": 0.5623,
+  "brierKnn": 0.24581,
+  "skill": 0.02904
+ },
+ "trades": {
+  "n": 1076,
+  "winRate": 0.5567,
+  "grossWinRate": 0.5743,
+  "avgGrossPts": 14.073,
+  "avgNetPts": 10.227,
+  "totalNetPts": 11004.6,
+  "totalNetNtd": 550229,
+  "avgWinPts": 53.54,
+  "avgLossPts": -44.16,
+  "profitFactor": 1.522,
+  "tStat": 5.353,
+  "sharpeAnnual": 5.606,
+  "maxDrawdownPts": 709.1,
+  "maxDrawdownNtd": 35457,
+  "tradingDays": 235
+ },
+ "verdict": {
+  "edgeFound": true,
+  "label": "樣本外有統計顯著優勢（仍需紙上交易驗證）",
+  "reasons": [
+   "機率預測略勝擲硬幣（Brier skill 0.0290）",
+   "交易 t 值 5.353（≥ 2）"
+  ]
+ },
+ "kelly": 0.1911,
+ "lattice": [
+  {
+   "lo": 0,
+   "hi": 0.35,
+   "n": 241,
+   "predicted": 0.3188,
+   "realized": 0.3,
+   "avgFwdPts": -24.55
+  },
+  {
+   "lo": 0.35,
+   "hi": 0.4,
+   "n": 346,
+   "predicted": 0.3754,
+   "realized": 0.3765,
+   "avgFwdPts": -16.96
+  },
+  {
+   "lo": 0.4,
+   "hi": 0.45,
+   "n": 525,
+   "predicted": 0.4266,
+   "realized": 0.4537,
+   "avgFwdPts": -7.41
+  },
+  {
+   "lo": 0.45,
+   "hi": 0.48,
+   "n": 424,
+   "predicted": 0.4647,
+   "realized": 0.481,
+   "avgFwdPts": -3.16
+  },
+  {
+   "lo": 0.48,
+   "hi": 0.5,
+   "n": 314,
+   "predicted": 0.4893,
+   "realized": 0.5258,
+   "avgFwdPts": -1.26
+  },
+  {
+   "lo": 0.5,
+   "hi": 0.52,
+   "n": 308,
+   "predicted": 0.5098,
+   "realized": 0.4801,
+   "avgFwdPts": -1.56
+  },
+  {
+   "lo": 0.52,
+   "hi": 0.55,
+   "n": 403,
+   "predicted": 0.5347,
+   "realized": 0.535,
+   "avgFwdPts": 5.28
+  },
+  {
+   "lo": 0.55,
+   "hi": 0.6,
+   "n": 532,
+   "predicted": 0.5734,
+   "realized": 0.5849,
+   "avgFwdPts": 10.73
+  },
+  {
+   "lo": 0.6,
+   "hi": 0.65,
+   "n": 323,
+   "predicted": 0.6212,
+   "realized": 0.6254,
+   "avgFwdPts": 15.89
+  },
+  {
+   "lo": 0.65,
+   "hi": 1.0,
+   "n": 109,
+   "predicted": 0.6679,
+   "realized": 0.5926,
+   "avgFwdPts": 16.07
+  }
+ ],
+ "thresholds": [
+  {
+   "threshold": 0.0,
+   "n": 1175,
+   "winRate": 0.4987,
+   "avgGrossPts": 7.788,
+   "avgNetPts": 3.942,
+   "totalNetNtd": 231603,
+   "tStat": 1.982,
+   "profitFactor": 1.157
+  },
+  {
+   "threshold": 0.02,
+   "n": 1165,
+   "winRate": 0.5202,
+   "avgGrossPts": 10.043,
+   "avgNetPts": 6.197,
+   "totalNetNtd": 360968,
+   "tStat": 3.232,
+   "profitFactor": 1.273
+  },
+  {
+   "threshold": 0.04,
+   "n": 1123,
+   "winRate": 0.5521,
+   "avgGrossPts": 12.811,
+   "avgNetPts": 8.965,
+   "totalNetNtd": 503394,
+   "tStat": 4.732,
+   "profitFactor": 1.437
+  },
+  {
+   "threshold": 0.05,
+   "n": 1076,
+   "winRate": 0.5567,
+   "avgGrossPts": 14.073,
+   "avgNetPts": 10.227,
+   "totalNetNtd": 550229,
+   "tStat": 5.353,
+   "profitFactor": 1.522
+  },
+  {
+   "threshold": 0.06,
+   "n": 1024,
+   "winRate": 0.5771,
+   "avgGrossPts": 16.138,
+   "avgNetPts": 12.292,
+   "totalNetNtd": 629336,
+   "tStat": 6.387,
+   "profitFactor": 1.67
+  },
+  {
+   "threshold": 0.08,
+   "n": 893,
+   "winRate": 0.5857,
+   "avgGrossPts": 16.319,
+   "avgNetPts": 12.474,
+   "totalNetNtd": 556946,
+   "tStat": 6.319,
+   "profitFactor": 1.724
+  },
+  {
+   "threshold": 0.1,
+   "n": 727,
+   "winRate": 0.6039,
+   "avgGrossPts": 18.439,
+   "avgNetPts": 14.594,
+   "totalNetNtd": 530504,
+   "tStat": 6.783,
+   "profitFactor": 1.926
+  },
+  {
+   "threshold": 0.12,
+   "n": 556,
+   "winRate": 0.6259,
+   "avgGrossPts": 20.545,
+   "avgNetPts": 16.702,
+   "totalNetNtd": 464304,
+   "tStat": 7.03,
+   "profitFactor": 2.194
+  },
+  {
+   "threshold": 0.15,
+   "n": 298,
+   "winRate": 0.6443,
+   "avgGrossPts": 22.852,
+   "avgNetPts": 19.014,
+   "totalNetNtd": 283302,
+   "tStat": 5.907,
+   "profitFactor": 2.458
+  },
+  {
+   "threshold": 0.2,
+   "n": 59,
+   "winRate": 0.661,
+   "avgGrossPts": 24.525,
+   "avgNetPts": 20.694,
+   "totalNetNtd": 61048,
+   "tStat": 2.724,
+   "profitFactor": 2.574
+  }
+ ],
+ "weights": [
+  {
+   "feature": "zRef",
+   "label": "距回合開盤 (z)",
+   "coef": -0.0933
+  },
+  {
+   "feature": "mom5",
+   "label": "5 分動能 (z)",
+   "coef": 0.0847
+  },
+  {
+   "feature": "zDay",
+   "label": "距當日開盤 (z)",
+   "coef": -0.1384
+  },
+  {
+   "feature": "vwapDev",
+   "label": "VWAP 乖離 (z)",
+   "coef": 0.0608
+  },
+  {
+   "feature": "rangePos",
+   "label": "日內區間位置",
+   "coef": 0.0768
+  },
+  {
+   "feature": "gap",
+   "label": "開盤跳空 (z)",
+   "coef": -0.0141
+  },
+  {
+   "feature": "flowBig",
+   "label": "大單淨流向 (z)",
+   "coef": 0.2099
+  },
+  {
+   "feature": "flowRetail",
+   "label": "散戶淨流向 (z)",
+   "coef": -0.1783
+  }
+ ],
+ "equity": [
+  {
+   "date": "S0065",
+   "equity": -2914
+  },
+  {
+   "date": "S0066",
+   "equity": -8429
+  },
+  {
+   "date": "S0067",
+   "equity": -404
+  },
+  {
+   "date": "S0068",
+   "equity": 6880
+  },
+  {
+   "date": "S0069",
+   "equity": 3115
+  },
+  {
+   "date": "S0070",
+   "equity": -2253
+  },
+  {
+   "date": "S0071",
+   "equity": -11974
+  },
+  {
+   "date": "S0072",
+   "equity": -5497
+  },
+  {
+   "date": "S0073",
+   "equity": -9673
+  },
+  {
+   "date": "S0074",
+   "equity": -12043
+  },
+  {
+   "date": "S0075",
+   "equity": -11563
+  },
+  {
+   "date": "S0076",
+   "equity": -9339
+  },
+  {
+   "date": "S0077",
+   "equity": -9
+  },
+  {
+   "date": "S0078",
+   "equity": -1185
+  },
+  {
+   "date": "S0079",
+   "equity": -12055
+  },
+  {
+   "date": "S0080",
+   "equity": -4974
+  },
+  {
+   "date": "S0081",
+   "equity": -6796
+  },
+  {
+   "date": "S0082",
+   "equity": -13612
+  },
+  {
+   "date": "S0083",
+   "equity": -3732
+  },
+  {
+   "date": "S0084",
+   "equity": -2752
+  },
+  {
+   "date": "S0085",
+   "equity": -5672
+  },
+  {
+   "date": "S0086",
+   "equity": -7542
+  },
+  {
+   "date": "S0087",
+   "equity": -8211
+  },
+  {
+   "date": "S0088",
+   "equity": -2279
+  },
+  {
+   "date": "S0089",
+   "equity": 4489
+  },
+  {
+   "date": "S0090",
+   "equity": -8781
+  },
+  {
+   "date": "S0091",
+   "equity": -4055
+  },
+  {
+   "date": "S0092",
+   "equity": -5830
+  },
+  {
+   "date": "S0093",
+   "equity": -3505
+  },
+  {
+   "date": "S0094",
+   "equity": -930
+  },
+  {
+   "date": "S0095",
+   "equity": -8258
+  },
+  {
+   "date": "S0096",
+   "equity": -688
+  },
+  {
+   "date": "S0097",
+   "equity": -5778
+  },
+  {
+   "date": "S0098",
+   "equity": -10703
+  },
+  {
+   "date": "S0099",
+   "equity": -7833
+  },
+  {
+   "date": "S0100",
+   "equity": -5709
+  },
+  {
+   "date": "S0101",
+   "equity": 3156
+  },
+  {
+   "date": "S0102",
+   "equity": 931
+  },
+  {
+   "date": "S0103",
+   "equity": 12354
+  },
+  {
+   "date": "S0104",
+   "equity": 22928
+  },
+  {
+   "date": "S0105",
+   "equity": 35390
+  },
+  {
+   "date": "S0106",
+   "equity": 45006
+  },
+  {
+   "date": "S0107",
+   "equity": 57279
+  },
+  {
+   "date": "S0108",
+   "equity": 63204
+  },
+  {
+   "date": "S0109",
+   "equity": 67374
+  },
+  {
+   "date": "S0110",
+   "equity": 67849
+  },
+  {
+   "date": "S0111",
+   "equity": 62524
+  },
+  {
+   "date": "S0112",
+   "equity": 67199
+  },
+  {
+   "date": "S0113",
+   "equity": 69524
+  },
+  {
+   "date": "S0114",
+   "equity": 52394
+  },
+  {
+   "date": "S0115",
+   "equity": 47464
+  },
+  {
+   "date": "S0116",
+   "equity": 61283
+  },
+  {
+   "date": "S0117",
+   "equity": 67457
+  },
+  {
+   "date": "S0118",
+   "equity": 80432
+  },
+  {
+   "date": "S0119",
+   "equity": 88752
+  },
+  {
+   "date": "S0120",
+   "equity": 87231
+  },
+  {
+   "date": "S0121",
+   "equity": 79756
+  },
+  {
+   "date": "S0122",
+   "equity": 85576
+  },
+  {
+   "date": "S0123",
+   "equity": 88601
+  },
+  {
+   "date": "S0124",
+   "equity": 88823
+  },
+  {
+   "date": "S0125",
+   "equity": 100743
+  },
+  {
+   "date": "S0126",
+   "equity": 110163
+  },
+  {
+   "date": "S0127",
+   "equity": 111029
+  },
+  {
+   "date": "S0128",
+   "equity": 115150
+  },
+  {
+   "date": "S0129",
+   "equity": 120023
+  },
+  {
+   "date": "S0130",
+   "equity": 125740
+  },
+  {
+   "date": "S0131",
+   "equity": 129856
+  },
+  {
+   "date": "S0132",
+   "equity": 117931
+  },
+  {
+   "date": "S0133",
+   "equity": 126356
+  },
+  {
+   "date": "S0134",
+   "equity": 120126
+  },
+  {
+   "date": "S0135",
+   "equity": 127145
+  },
+  {
+   "date": "S0136",
+   "equity": 127865
+  },
+  {
+   "date": "S0137",
+   "equity": 128180
+  },
+  {
+   "date": "S0138",
+   "equity": 133055
+  },
+  {
+   "date": "S0139",
+   "equity": 134630
+  },
+  {
+   "date": "S0140",
+   "equity": 135655
+  },
+  {
+   "date": "S0141",
+   "equity": 140632
+  },
+  {
+   "date": "S0142",
+   "equity": 144856
+  },
+  {
+   "date": "S0143",
+   "equity": 134386
+  },
+  {
+   "date": "S0144",
+   "equity": 143619
+  },
+  {
+   "date": "S0145",
+   "equity": 155393
+  },
+  {
+   "date": "S0146",
+   "equity": 159726
+  },
+  {
+   "date": "S0147",
+   "equity": 162747
+  },
+  {
+   "date": "S0148",
+   "equity": 170132
+  },
+  {
+   "date": "S0149",
+   "equity": 179719
+  },
+  {
+   "date": "S0150",
+   "equity": 169901
+  },
+  {
+   "date": "S0151",
+   "equity": 169595
+  },
+  {
+   "date": "S0152",
+   "equity": 167989
+  },
+  {
+   "date": "S0153",
+   "equity": 177730
+  },
+  {
+   "date": "S0154",
+   "equity": 159020
+  },
+  {
+   "date": "S0155",
+   "equity": 158349
+  },
+  {
+   "date": "S0156",
+   "equity": 153534
+  },
+  {
+   "date": "S0157",
+   "equity": 153359
+  },
+  {
+   "date": "S0158",
+   "equity": 152883
+  },
+  {
+   "date": "S0159",
+   "equity": 160364
+  },
+  {
+   "date": "S0160",
+   "equity": 157392
+  },
+  {
+   "date": "S0161",
+   "equity": 155077
+  },
+  {
+   "date": "S0162",
+   "equity": 163962
+  },
+  {
+   "date": "S0163",
+   "equity": 173301
+  },
+  {
+   "date": "S0164",
+   "equity": 166683
+  },
+  {
+   "date": "S0165",
+   "equity": 162524
+  },
+  {
+   "date": "S0166",
+   "equity": 165219
+  },
+  {
+   "date": "S0167",
+   "equity": 173464
+  },
+  {
+   "date": "S0168",
+   "equity": 172050
+  },
+  {
+   "date": "S0169",
+   "equity": 172095
+  },
+  {
+   "date": "S0170",
+   "equity": 171090
+  },
+  {
+   "date": "S0171",
+   "equity": 186735
+  },
+  {
+   "date": "S0172",
+   "equity": 191967
+  },
+  {
+   "date": "S0173",
+   "equity": 194591
+  },
+  {
+   "date": "S0174",
+   "equity": 199825
+  },
+  {
+   "date": "S0175",
+   "equity": 189411
+  },
+  {
+   "date": "S0176",
+   "equity": 189206
+  },
+  {
+   "date": "S0177",
+   "equity": 191838
+  },
+  {
+   "date": "S0178",
+   "equity": 204882
+  },
+  {
+   "date": "S0179",
+   "equity": 200018
+  },
+  {
+   "date": "S0180",
+   "equity": 195954
+  },
+  {
+   "date": "S0181",
+   "equity": 203099
+  },
+  {
+   "date": "S0182",
+   "equity": 202092
+  },
+  {
+   "date": "S0183",
+   "equity": 210882
+  },
+  {
+   "date": "S0184",
+   "equity": 210664
+  },
+  {
+   "date": "S0185",
+   "equity": 205488
+  },
+  {
+   "date": "S0186",
+   "equity": 198228
+  },
+  {
+   "date": "S0187",
+   "equity": 206810
+  },
+  {
+   "date": "S0188",
+   "equity": 200600
+  },
+  {
+   "date": "S0189",
+   "equity": 199590
+  },
+  {
+   "date": "S0190",
+   "equity": 200322
+  },
+  {
+   "date": "S0191",
+   "equity": 205366
+  },
+  {
+   "date": "S0192",
+   "equity": 208066
+  },
+  {
+   "date": "S0193",
+   "equity": 214166
+  },
+  {
+   "date": "S0194",
+   "equity": 217867
+  },
+  {
+   "date": "S0195",
+   "equity": 232568
+  },
+  {
+   "date": "S0196",
+   "equity": 239818
+  },
+  {
+   "date": "S0197",
+   "equity": 244018
+  },
+  {
+   "date": "S0198",
+   "equity": 248661
+  },
+  {
+   "date": "S0199",
+   "equity": 234655
+  },
+  {
+   "date": "S0200",
+   "equity": 248263
+  },
+  {
+   "date": "S0201",
+   "equity": 249872
+  },
+  {
+   "date": "S0202",
+   "equity": 254896
+  },
+  {
+   "date": "S0203",
+   "equity": 255103
+  },
+  {
+   "date": "S0204",
+   "equity": 267756
+  },
+  {
+   "date": "S0205",
+   "equity": 276705
+  },
+  {
+   "date": "S0206",
+   "equity": 282454
+  },
+  {
+   "date": "S0207",
+   "equity": 279102
+  },
+  {
+   "date": "S0208",
+   "equity": 294453
+  },
+  {
+   "date": "S0209",
+   "equity": 288883
+  },
+  {
+   "date": "S0210",
+   "equity": 279033
+  },
+  {
+   "date": "S0211",
+   "equity": 282286
+  },
+  {
+   "date": "S0212",
+   "equity": 286830
+  },
+  {
+   "date": "S0213",
+   "equity": 290284
+  },
+  {
+   "date": "S0214",
+   "equity": 293639
+  },
+  {
+   "date": "S0215",
+   "equity": 293140
+  },
+  {
+   "date": "S0216",
+   "equity": 304082
+  },
+  {
+   "date": "S0217",
+   "equity": 315433
+  },
+  {
+   "date": "S0218",
+   "equity": 311423
+  },
+  {
+   "date": "S0219",
+   "equity": 306073
+  },
+  {
+   "date": "S0220",
+   "equity": 300813
+  },
+  {
+   "date": "S0221",
+   "equity": 313863
+  },
+  {
+   "date": "S0222",
+   "equity": 320813
+  },
+  {
+   "date": "S0223",
+   "equity": 323413
+  },
+  {
+   "date": "S0224",
+   "equity": 332553
+  },
+  {
+   "date": "S0225",
+   "equity": 325652
+  },
+  {
+   "date": "S0226",
+   "equity": 324049
+  },
+  {
+   "date": "S0227",
+   "equity": 319095
+  },
+  {
+   "date": "S0228",
+   "equity": 318440
+  },
+  {
+   "date": "S0229",
+   "equity": 321976
+  },
+  {
+   "date": "S0230",
+   "equity": 331975
+  },
+  {
+   "date": "S0231",
+   "equity": 333275
+  },
+  {
+   "date": "S0232",
+   "equity": 336665
+  },
+  {
+   "date": "S0233",
+   "equity": 335405
+  },
+  {
+   "date": "S0234",
+   "equity": 336647
+  },
+  {
+   "date": "S0235",
+   "equity": 346847
+  },
+  {
+   "date": "S0236",
+   "equity": 354034
+  },
+  {
+   "date": "S0237",
+   "equity": 355034
+  },
+  {
+   "date": "S0238",
+   "equity": 357734
+  },
+  {
+   "date": "S0239",
+   "equity": 363634
+  },
+  {
+   "date": "S0240",
+   "equity": 360984
+  },
+  {
+   "date": "S0241",
+   "equity": 358424
+  },
+  {
+   "date": "S0242",
+   "equity": 363874
+  },
+  {
+   "date": "S0243",
+   "equity": 368274
+  },
+  {
+   "date": "S0244",
+   "equity": 360724
+  },
+  {
+   "date": "S0245",
+   "equity": 357924
+  },
+  {
+   "date": "S0246",
+   "equity": 369212
+  },
+  {
+   "date": "S0247",
+   "equity": 372008
+  },
+  {
+   "date": "S0248",
+   "equity": 384803
+  },
+  {
+   "date": "S0249",
+   "equity": 383880
+  },
+  {
+   "date": "S0250",
+   "equity": 375860
+  },
+  {
+   "date": "S0251",
+   "equity": 384600
+  },
+  {
+   "date": "S0252",
+   "equity": 376890
+  },
+  {
+   "date": "S0253",
+   "equity": 377990
+  },
+  {
+   "date": "S0254",
+   "equity": 393780
+  },
+  {
+   "date": "S0255",
+   "equity": 397080
+  },
+  {
+   "date": "S0256",
+   "equity": 397520
+  },
+  {
+   "date": "S0257",
+   "equity": 389158
+  },
+  {
+   "date": "S0258",
+   "equity": 396157
+  },
+  {
+   "date": "S0259",
+   "equity": 399407
+  },
+  {
+   "date": "S0260",
+   "equity": 398386
+  },
+  {
+   "date": "S0261",
+   "equity": 398924
+  },
+  {
+   "date": "S0262",
+   "equity": 398770
+  },
+  {
+   "date": "S0263",
+   "equity": 407166
+  },
+  {
+   "date": "S0264",
+   "equity": 407392
+  },
+  {
+   "date": "S0265",
+   "equity": 399333
+  },
+  {
+   "date": "S0266",
+   "equity": 404578
+  },
+  {
+   "date": "S0267",
+   "equity": 410055
+  },
+  {
+   "date": "S0268",
+   "equity": 420004
+  },
+  {
+   "date": "S0269",
+   "equity": 433449
+  },
+  {
+   "date": "S0270",
+   "equity": 434135
+  },
+  {
+   "date": "S0271",
+   "equity": 443880
+  },
+  {
+   "date": "S0272",
+   "equity": 450225
+  },
+  {
+   "date": "S0273",
+   "equity": 449911
+  },
+  {
+   "date": "S0274",
+   "equity": 444054
+  },
+  {
+   "date": "S0275",
+   "equity": 451990
+  },
+  {
+   "date": "S0276",
+   "equity": 448926
+  },
+  {
+   "date": "S0277",
+   "equity": 457871
+  },
+  {
+   "date": "S0278",
+   "equity": 455516
+  },
+  {
+   "date": "S0279",
+   "equity": 451909
+  },
+  {
+   "date": "S0280",
+   "equity": 466899
+  },
+  {
+   "date": "S0281",
+   "equity": 474189
+  },
+  {
+   "date": "S0282",
+   "equity": 479620
+  },
+  {
+   "date": "S0283",
+   "equity": 473141
+  },
+  {
+   "date": "S0284",
+   "equity": 474063
+  },
+  {
+   "date": "S0285",
+   "equity": 477345
+  },
+  {
+   "date": "S0286",
+   "equity": 473284
+  },
+  {
+   "date": "S0287",
+   "equity": 476869
+  },
+  {
+   "date": "S0288",
+   "equity": 481704
+  },
+  {
+   "date": "S0289",
+   "equity": 485485
+  },
+  {
+   "date": "S0290",
+   "equity": 488009
+  },
+  {
+   "date": "S0291",
+   "equity": 495691
+  },
+  {
+   "date": "S0292",
+   "equity": 505626
+  },
+  {
+   "date": "S0293",
+   "equity": 518411
+  },
+  {
+   "date": "S0294",
+   "equity": 524548
+  },
+  {
+   "date": "S0295",
+   "equity": 529083
+  },
+  {
+   "date": "S0296",
+   "equity": 532018
+  },
+  {
+   "date": "S0297",
+   "equity": 546203
+  },
+  {
+   "date": "S0298",
+   "equity": 551636
+  },
+  {
+   "date": "S0299",
+   "equity": 550218
+  }
+ ],
+ "recentTrades": [
+  {
+   "date": "S0292",
+   "round": "08:45-09:45",
+   "time": "09:30",
+   "side": -1,
+   "p": 0.2544,
+   "entry": 21508,
+   "exit": 21470,
+   "ref": 21562,
+   "grossPts": 38,
+   "netPts": 34.14,
+   "netNtd": 1707
+  },
+  {
+   "date": "S0292",
+   "round": "09:45-10:45",
+   "time": "10:00",
+   "side": 1,
+   "p": 0.576,
+   "entry": 21461,
+   "exit": 21521,
+   "ref": 21470,
+   "grossPts": 60,
+   "netPts": 56.14,
+   "netNtd": 2807
+  },
+  {
+   "date": "S0292",
+   "round": "10:45-11:45",
+   "time": "11:00",
+   "side": 1,
+   "p": 0.5761,
+   "entry": 21558,
+   "exit": 21605,
+   "ref": 21521,
+   "grossPts": 47,
+   "netPts": 43.14,
+   "netNtd": 2157
+  },
+  {
+   "date": "S0292",
+   "round": "11:45-12:45",
+   "time": "12:00",
+   "side": -1,
+   "p": 0.363,
+   "entry": 21579,
+   "exit": 21614,
+   "ref": 21605,
+   "grossPts": -35,
+   "netPts": -38.86,
+   "netNtd": -1943
+  },
+  {
+   "date": "S0292",
+   "round": "12:45-13:45",
+   "time": "13:00",
+   "side": -1,
+   "p": 0.3269,
+   "entry": 21569,
+   "exit": 21461,
+   "ref": 21614,
+   "grossPts": 108,
+   "netPts": 104.14,
+   "netNtd": 5207
+  },
+  {
+   "date": "S0293",
+   "round": "08:45-09:45",
+   "time": "09:00",
+   "side": -1,
+   "p": 0.2923,
+   "entry": 21381,
+   "exit": 21314,
+   "ref": 21406,
+   "grossPts": 67,
+   "netPts": 63.14,
+   "netNtd": 3157
+  },
+  {
+   "date": "S0293",
+   "round": "09:45-10:45",
+   "time": "10:00",
+   "side": 1,
+   "p": 0.5956,
+   "entry": 21343,
+   "exit": 21291,
+   "ref": 21314,
+   "grossPts": -52,
+   "netPts": -55.85,
+   "netNtd": -2793
+  },
+  {
+   "date": "S0293",
+   "round": "10:45-11:45",
+   "time": "11:00",
+   "side": 1,
+   "p": 0.6705,
+   "entry": 21297,
+   "exit": 21406,
+   "ref": 21291,
+   "grossPts": 109,
+   "netPts": 105.15,
+   "netNtd": 5257
+  },
+  {
+   "date": "S0293",
+   "round": "11:45-12:45",
+   "time": "12:00",
+   "side": -1,
+   "p": 0.379,
+   "entry": 21384,
+   "exit": 21315,
+   "ref": 21406,
+   "grossPts": 69,
+   "netPts": 65.14,
+   "netNtd": 3257
+  },
+  {
+   "date": "S0293",
+   "round": "12:45-13:45",
+   "time": "13:00",
+   "side": -1,
+   "p": 0.3049,
+   "entry": 21278,
+   "exit": 21196,
+   "ref": 21315,
+   "grossPts": 82,
+   "netPts": 78.15,
+   "netNtd": 3907
+  },
+  {
+   "date": "S0294",
+   "round": "08:45-09:45",
+   "time": "09:00",
+   "side": -1,
+   "p": 0.3592,
+   "entry": 21316,
+   "exit": 21215,
+   "ref": 21320,
+   "grossPts": 101,
+   "netPts": 97.15,
+   "netNtd": 4857
+  },
+  {
+   "date": "S0294",
+   "round": "09:45-10:45",
+   "time": "10:00",
+   "side": 1,
+   "p": 0.5552,
+   "entry": 21177,
+   "exit": 21178,
+   "ref": 21215,
+   "grossPts": 1,
+   "netPts": -2.85,
+   "netNtd": -142
+  },
+  {
+   "date": "S0294",
+   "round": "10:45-11:45",
+   "time": "11:00",
+   "side": -1,
+   "p": 0.4406,
+   "entry": 21180,
+   "exit": 21240,
+   "ref": 21178,
+   "grossPts": -60,
+   "netPts": -63.85,
+   "netNtd": -3192
+  },
+  {
+   "date": "S0294",
+   "round": "11:45-12:45",
+   "time": "12:00",
+   "side": 1,
+   "p": 0.588,
+   "entry": 21259,
+   "exit": 21279,
+   "ref": 21240,
+   "grossPts": 20,
+   "netPts": 16.15,
+   "netNtd": 807
+  },
+  {
+   "date": "S0294",
+   "round": "12:45-13:45",
+   "time": "13:00",
+   "side": 1,
+   "p": 0.5572,
+   "entry": 21288,
+   "exit": 21368,
+   "ref": 21279,
+   "grossPts": 80,
+   "netPts": 76.15,
+   "netNtd": 3807
+  },
+  {
+   "date": "S0295",
+   "round": "08:45-09:45",
+   "time": "09:00",
+   "side": -1,
+   "p": 0.3788,
+   "entry": 21320,
+   "exit": 21310,
+   "ref": 21354,
+   "grossPts": 10,
+   "netPts": 6.15,
+   "netNtd": 307
+  },
+  {
+   "date": "S0295",
+   "round": "09:45-10:45",
+   "time": "10:15",
+   "side": -1,
+   "p": 0.4425,
+   "entry": 21280,
+   "exit": 21280,
+   "ref": 21310,
+   "grossPts": 0,
+   "netPts": -3.85,
+   "netNtd": -193
+  },
+  {
+   "date": "S0295",
+   "round": "10:45-11:45",
+   "time": "11:00",
+   "side": 1,
+   "p": 0.6416,
+   "entry": 21301,
+   "exit": 21365,
+   "ref": 21280,
+   "grossPts": 64,
+   "netPts": 60.15,
+   "netNtd": 3007
+  },
+  {
+   "date": "S0295",
+   "round": "11:45-12:45",
+   "time": "12:15",
+   "side": -1,
+   "p": 0.4475,
+   "entry": 21360,
+   "exit": 21319,
+   "ref": 21365,
+   "grossPts": 41,
+   "netPts": 37.15,
+   "netNtd": 1857
+  },
+  {
+   "date": "S0295",
+   "round": "12:45-13:45",
+   "time": "13:30",
+   "side": 1,
+   "p": 0.5578,
+   "entry": 21339,
+   "exit": 21334,
+   "ref": 21319,
+   "grossPts": -5,
+   "netPts": -8.85,
+   "netNtd": -443
+  },
+  {
+   "date": "S0296",
+   "round": "08:45-09:45",
+   "time": "09:30",
+   "side": 1,
+   "p": 0.6265,
+   "entry": 21351,
+   "exit": 21394,
+   "ref": 21358,
+   "grossPts": 43,
+   "netPts": 39.15,
+   "netNtd": 1957
+  },
+  {
+   "date": "S0296",
+   "round": "09:45-10:45",
+   "time": "10:00",
+   "side": 1,
+   "p": 0.623,
+   "entry": 21434,
+   "exit": 21352,
+   "ref": 21394,
+   "grossPts": -82,
+   "netPts": -85.86,
+   "netNtd": -4293
+  },
+  {
+   "date": "S0296",
+   "round": "10:45-11:45",
+   "time": "11:00",
+   "side": -1,
+   "p": 0.4067,
+   "entry": 21334,
+   "exit": 21361,
+   "ref": 21352,
+   "grossPts": -27,
+   "netPts": -30.85,
+   "netNtd": -1543
+  },
+  {
+   "date": "S0296",
+   "round": "11:45-12:45",
+   "time": "12:15",
+   "side": 1,
+   "p": 0.583,
+   "entry": 21423,
+   "exit": 21522,
+   "ref": 21361,
+   "grossPts": 99,
+   "netPts": 95.14,
+   "netNtd": 4757
+  },
+  {
+   "date": "S0296",
+   "round": "12:45-13:45",
+   "time": "13:00",
+   "side": 1,
+   "p": 0.582,
+   "entry": 21570,
+   "exit": 21615,
+   "ref": 21522,
+   "grossPts": 45,
+   "netPts": 41.14,
+   "netNtd": 2057
+  },
+  {
+   "date": "S0297",
+   "round": "08:45-09:45",
+   "time": "09:00",
+   "side": -1,
+   "p": 0.4488,
+   "entry": 21672,
+   "exit": 21601,
+   "ref": 21677,
+   "grossPts": 71,
+   "netPts": 67.13,
+   "netNtd": 3357
+  },
+  {
+   "date": "S0297",
+   "round": "09:45-10:45",
+   "time": "10:00",
+   "side": -1,
+   "p": 0.4054,
+   "entry": 21604,
+   "exit": 21648,
+   "ref": 21601,
+   "grossPts": -44,
+   "netPts": -47.86,
+   "netNtd": -2393
+  },
+  {
+   "date": "S0297",
+   "round": "10:45-11:45",
+   "time": "11:15",
+   "side": -1,
+   "p": 0.4052,
+   "entry": 21690,
+   "exit": 21660,
+   "ref": 21648,
+   "grossPts": 30,
+   "netPts": 26.13,
+   "netNtd": 1307
+  },
+  {
+   "date": "S0297",
+   "round": "11:45-12:45",
+   "time": "12:00",
+   "side": -1,
+   "p": 0.2894,
+   "entry": 21601,
+   "exit": 21500,
+   "ref": 21660,
+   "grossPts": 101,
+   "netPts": 97.14,
+   "netNtd": 4857
+  },
+  {
+   "date": "S0297",
+   "round": "12:45-13:45",
+   "time": "13:00",
+   "side": 1,
+   "p": 0.5739,
+   "entry": 21484,
+   "exit": 21629,
+   "ref": 21500,
+   "grossPts": 145,
+   "netPts": 141.14,
+   "netNtd": 7057
+  },
+  {
+   "date": "S0298",
+   "round": "08:45-09:45",
+   "time": "09:00",
+   "side": 1,
+   "p": 0.6045,
+   "entry": 21603,
+   "exit": 21638,
+   "ref": 21602,
+   "grossPts": 35,
+   "netPts": 31.14,
+   "netNtd": 1557
+  },
+  {
+   "date": "S0298",
+   "round": "09:45-10:45",
+   "time": "10:00",
+   "side": -1,
+   "p": 0.3588,
+   "entry": 21567,
+   "exit": 21625,
+   "ref": 21638,
+   "grossPts": -58,
+   "netPts": -61.86,
+   "netNtd": -3093
+  },
+  {
+   "date": "S0298",
+   "round": "10:45-11:45",
+   "time": "11:00",
+   "side": 1,
+   "p": 0.6018,
+   "entry": 21673,
+   "exit": 21781,
+   "ref": 21625,
+   "grossPts": 108,
+   "netPts": 104.13,
+   "netNtd": 5207
+  },
+  {
+   "date": "S0298",
+   "round": "11:45-12:45",
+   "time": "12:15",
+   "side": -1,
+   "p": 0.3066,
+   "entry": 21782,
+   "exit": 21789,
+   "ref": 21781,
+   "grossPts": -7,
+   "netPts": -10.87,
+   "netNtd": -544
+  },
+  {
+   "date": "S0298",
+   "round": "12:45-13:45",
+   "time": "13:00",
+   "side": 1,
+   "p": 0.6281,
+   "entry": 21860,
+   "exit": 21910,
+   "ref": 21789,
+   "grossPts": 50,
+   "netPts": 46.13,
+   "netNtd": 2306
+  },
+  {
+   "date": "S0299",
+   "round": "08:45-09:45",
+   "time": "09:15",
+   "side": 1,
+   "p": 0.5553,
+   "entry": 21884,
+   "exit": 21842,
+   "ref": 21909,
+   "grossPts": -42,
+   "netPts": -45.88,
+   "netNtd": -2294
+  },
+  {
+   "date": "S0299",
+   "round": "09:45-10:45",
+   "time": "10:00",
+   "side": -1,
+   "p": 0.3631,
+   "entry": 21779,
+   "exit": 21804,
+   "ref": 21842,
+   "grossPts": -25,
+   "netPts": -28.87,
+   "netNtd": -1444
+  },
+  {
+   "date": "S0299",
+   "round": "10:45-11:45",
+   "time": "11:00",
+   "side": -1,
+   "p": 0.4288,
+   "entry": 21807,
+   "exit": 21714,
+   "ref": 21804,
+   "grossPts": 93,
+   "netPts": 89.13,
+   "netNtd": 4456
+  },
+  {
+   "date": "S0299",
+   "round": "11:45-12:45",
+   "time": "12:00",
+   "side": 1,
+   "p": 0.5565,
+   "entry": 21731,
+   "exit": 21754,
+   "ref": 21714,
+   "grossPts": 23,
+   "netPts": 19.13,
+   "netNtd": 957
+  },
+  {
+   "date": "S0299",
+   "round": "12:45-13:45",
+   "time": "13:15",
+   "side": -1,
+   "p": 0.4392,
+   "entry": 21670,
+   "exit": 21728,
+   "ref": 21754,
+   "grossPts": -58,
+   "netPts": -61.87,
+   "netNtd": -3093
+  }
+ ],
+ "elapsedSec": 0.8
+}
