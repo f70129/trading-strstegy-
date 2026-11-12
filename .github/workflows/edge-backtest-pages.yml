@@ -1,0 +1,47 @@
+name: Deploy standalone backtest (Cloudflare Pages)
+
+# 獨立的 Cloudflare Pages 專案，只放回測看板：https://tx-edge-backtest.pages.dev
+on:
+  push:
+    branches: [main, "claude/pensive-meitner-a7e6v4"]
+    paths: ["standalone/**", "backtest.html", "js/edge-core.js", "js/smartmoney-core.js", "scripts/build-standalone.mjs", ".github/workflows/edge-backtest-pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROJECT: tx-edge-backtest
+  CLOUDFLARE_ACCOUNT_ID: a96bc667b234e3831128e3e481821ff0
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build standalone page
+        run: |
+          node scripts/build-standalone.mjs
+          node tests/edge-parity.js
+          mkdir -p dist
+          cp standalone/tx-edge-backtest.html dist/index.html
+          cp icon.svg dist/icon.svg
+          printf '/*\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: no-referrer\n' > dist/_headers
+      - name: Check Cloudflare token
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::缺少 repo secret CLOUDFLARE_API_TOKEN（需要 Cloudflare Pages:Edit 權限）"; exit 1
+          fi
+      - name: Create Pages project (first run only)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx --yes wrangler@4 pages project create "$PROJECT" --production-branch main || echo "專案已存在或建立失敗，繼續部署"
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx --yes wrangler@4 pages deploy dist --project-name "$PROJECT" --branch main --commit-dirty=true
