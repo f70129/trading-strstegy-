@@ -1,0 +1,1776 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>台指機率優勢回測（獨立版）</title>
+<!-- 獨立版 build 2026-11-12：由 scripts/build-standalone.mjs 產生，請勿直接編輯 -->
+<meta name="theme-color" content="#0a0e1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="優勢回測">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>/* js/smartmoney-core.js（內嵌） */
+/**
+ * 台指期「聰明錢」大單 / 小單流向引擎（核心邏輯，瀏覽器與 Node 共用）
+ *
+ * 用途：
+ *   1. 逐筆成交依商品 + 口數分類：大單（大戶）、中單、小單（散戶：小台 / 微台 / 大台 1 口）
+ *   2. 以 Tick Rule 判定主動買 / 主動賣（FinMind 逐筆資料沒有內外盤欄位）
+ *   3. 聚合成 1 分 K，計算大戶淨流、散戶淨流、SMI（Smart Money Index）
+ *   4. 產生順勢跟單訊號，並以模擬盤（PaperTrader）計算損益
+ *   5. 回測 / 參數網格搜尋，找出最佳參數
+ *
+ * 設計原則：純函式、無 DOM、無網路；同一份邏輯在 smartmoney_engine.py 有 1:1 對應，
+ *          tests/ 內有跨語言一致性檢核（同一組合成資料，兩邊損益必須完全相同）。
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.SmartMoney = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const VERSION = '1.1.0';
+
+  /** 契約規模換算為「大台等值口數」：大台 200 元/點、小台 50、微台 5 */
+  const CONTRACT_WEIGHT = { TX: 1, MTX: 0.25, TMF: 0.025 };
+
+  /** 快照 / 期交所代碼 → FinMind 逐筆代碼 */
+  const PRODUCT_ALIAS = { TXF: 'TX', MXF: 'MTX', TMF: 'TMF', TX: 'TX', MTX: 'MTX' };
+
+  const POINT_VALUE_NTD = 200; // 大台 1 點 = 200 元
+
+  const DEFAULT_PARAMS = {
+    bigLot: 10,          // 大台單筆 >= bigLot 口 → 大單（大戶）
+    midLot: 3,           // 大台單筆 midLot..bigLot-1 口 → 中單（中實戶）
+    windowMin: 10,       // 淨流量觀察窗（分鐘）
+    zEntry: 1.5,         // SMI 進場門檻
+    zExit: 0,            // SMI 反向穿越出場門檻（0 = 轉負/轉正即出場）
+    stopPts: 30,         // 停損（點）
+    targetPts: 60,       // 停利（點）
+    retailWeight: 0.5,   // 散戶反向權重（SMI = zBig - retailWeight * zRetail）
+    trendFilter: true,   // 價格需站在 VWAP 同側才進場
+    costPts: 1.5,        // 每趟來回成本（手續費 + 期交稅 + 滑價），以點計
+    cooldownMin: 5,      // 出場後冷卻分鐘
+    maxTradesPerDay: 6,
+    sessionStart: '08:45',
+    sessionEnd: '13:45',
+    entryCutoff: '13:00', // 之後不再新進場
+    flatAt: '13:40',      // 強制平倉
+    minBarsForZ: 10,      // 至少幾根 K 才開始計算 z-score
+    breadthFilter: false, // 啟用漲跌家數（市場廣度／類江波圖）過濾
+    breadthLimit: 700,    // 淨漲跌家數（漲家數−跌家數）≥ 此值 → 不做多；≤ −此值 → 不做空
+  };
+
+  // ---------- 小工具 ----------
+  function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+  function round(x, d) { const m = Math.pow(10, d || 0); return Math.round(x * m) / m; }
+  function hhmmToMin(s) { const [h, m] = String(s).split(':').map(Number); return h * 60 + m; }
+  function minToHHMM(m) { const h = Math.floor(m / 60), mm = m % 60; return String(h).padStart(2, '0') + ':' + String(mm).padStart(2, '0'); }
+  function mergeParams(p) { return Object.assign({}, DEFAULT_PARAMS, p || {}); }
+
+  function normalizeProduct(id) {
+    const s = String(id || '').toUpperCase();
+    if (PRODUCT_ALIAS[s]) return PRODUCT_ALIAS[s];
+    // 快照代碼如 TXFI6 / MXFI6 / TMFI6
+    const head = s.slice(0, 3);
+    return PRODUCT_ALIAS[head] || s;
+  }
+
+  function contractWeight(product) {
+    return CONTRACT_WEIGHT[normalizeProduct(product)] || 0;
+  }
+
+  /**
+   * 解析 FinMind 逐筆的 date 欄位。
+   * 可能格式："2026-09-05 08:45:00.123"、"2026-09-05 08:45:00"、"2026-09-05"（無時間）
+   * 回傳 { date, minute(分鐘序, 0-1439), ms(當日毫秒) }
+   */
+  function parseTickTime(dateStr, fallbackMinute) {
+    const s = String(dateStr || '').trim();
+    const m = s.match(/^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?)?/);
+    if (!m) return { date: s.slice(0, 10), minute: fallbackMinute || 0, ms: (fallbackMinute || 0) * 60000 };
+    if (m[2] == null) return { date: m[1], minute: fallbackMinute || 0, ms: (fallbackMinute || 0) * 60000 };
+    const h = Number(m[2]), mi = Number(m[3]), se = Number(m[4] || 0);
+    const frac = m[5] ? Number(('0.' + m[5])) : 0;
+    return { date: m[1], minute: h * 60 + mi, ms: ((h * 60 + mi) * 60 + se) * 1000 + Math.round(frac * 1000) };
+  }
+
+  /**
+   * 挑近月契約：排除價差單（contract_date 含 "/"），取成交量最大的 contract_date。
+   */
+  function selectNearContract(rows) {
+    const vol = {};
+    for (const r of rows) {
+      const c = String(r.contract_date || '');
+      if (!c || c.includes('/')) continue;
+      vol[c] = (vol[c] || 0) + Number(r.volume || 0);
+    }
+    const keys = Object.keys(vol);
+    if (!keys.length) return null;
+    keys.sort((a, b) => vol[b] - vol[a] || (a < b ? -1 : 1));
+    return keys[0];
+  }
+
+  /**
+   * Tick Rule：上漲 tick = 主動買(+1)，下跌 tick = 主動賣(-1)，平盤沿用上一筆方向。
+   */
+  function tickSide(price, lastPrice, lastSide) {
+    if (lastPrice == null) return 0;
+    if (price > lastPrice) return 1;
+    if (price < lastPrice) return -1;
+    return lastSide || 0;
+  }
+
+  /**
+   * 分類：'big' 大單、'mid' 中單、'small' 小單（散戶）
+   * 規則（可調）：大台 >= bigLot 口 → big；大台 midLot..bigLot-1 → mid；
+   *              大台 < midLot、小台、微台 一律 small。
+   */
+  function classify(product, volume, params) {
+    const p = params || DEFAULT_PARAMS;
+    const prod = normalizeProduct(product);
+    const v = Number(volume) || 0;
+    if (prod === 'TX') {
+      if (v >= p.bigLot) return 'big';
+      if (v >= p.midLot) return 'mid';
+      return 'small';
+    }
+    return 'small';
+  }
+
+  /**
+   * 把 FinMind TaiwanFuturesTick 原始列轉成統一的 trade 物件。
+   * rowsByProduct: { TX: rows, MTX: rows, TMF: rows }（每個商品各自取近月）
+   * 回傳依時間排序的 trades：{ ms, minute, product, price, volume, side }
+   * 注意：side 只用「同商品」的價格序列判定（各商品各自跑 tick rule）。
+   */
+  function rowsToTrades(rowsByProduct, opts) {
+    const o = Object.assign({ daySessionOnly: true, start: '08:45', end: '13:45' }, opts || {});
+    const startMin = hhmmToMin(o.start), endMin = hhmmToMin(o.end);
+    const out = [];
+    for (const [productRaw, rows] of Object.entries(rowsByProduct || {})) {
+      if (!rows || !rows.length) continue;
+      const product = normalizeProduct(productRaw);
+      const near = selectNearContract(rows);
+      let lastPrice = null, lastSide = 0, idx = 0;
+      const seq = [];
+      for (const r of rows) {
+        const c = String(r.contract_date || '');
+        if (near && c !== near) continue;
+        const t = parseTickTime(r.date, 0);
+        seq.push({ t, r, i: idx++ });
+      }
+      // FinMind 通常已按時間排序；保險起見用穩定排序
+      seq.sort((a, b) => a.t.ms - b.t.ms || a.i - b.i);
+      for (const { t, r } of seq) {
+        if (o.daySessionOnly && (t.minute < startMin || t.minute > endMin)) continue;
+        const price = Number(r.price), volume = Number(r.volume) || 0;
+        if (!Number.isFinite(price) || volume <= 0) continue;
+        const side = tickSide(price, lastPrice, lastSide);
+        lastPrice = price; lastSide = side;
+        out.push({ ms: t.ms, minute: t.minute, product, price, volume, side });
+      }
+    }
+    out.sort((a, b) => a.ms - b.ms);
+    return out;
+  }
+
+  // ---------- 1 分 K 聚合 ----------
+  function newBar(minute) {
+    return {
+      minute, time: minToHHMM(minute),
+      open: null, high: -Infinity, low: Infinity, close: null,
+      vol: 0, amt: 0,            // 大台價格成交量與金額（VWAP 用）
+      bigBuy: 0, bigSell: 0,     // 大單（大台口數）
+      midBuy: 0, midSell: 0,     // 中單（大台口數）
+      smallBuy: 0, smallSell: 0, // 小單（換算為大台等值口數）
+      bigTrades: 0, smallTrades: 0,
+      unkBuy: 0, unkSell: 0,     // 無法判定方向者（side=0）
+      unsBuy: 0, unsSell: 0,     // 即時快照未取樣到的量（不計入大小單）
+    };
+  }
+
+  /**
+   * FlowBook：即時累加逐筆並維護 1 分 K。
+   * 只用 TX 的價格做 OHLC / VWAP（主商品）；小台微台只貢獻流量。
+   */
+  class FlowBook {
+    constructor(params) {
+      this.params = mergeParams(params);
+      this.bars = [];
+      this._byMinute = new Map();
+      this.totals = { bigBuy: 0, bigSell: 0, midBuy: 0, midSell: 0, smallBuy: 0, smallSell: 0, unsBuy: 0, unsSell: 0, bigTrades: 0, smallTrades: 0, trades: 0 };
+      this.lastPrice = null;
+    }
+    barFor(minute) {
+      let b = this._byMinute.get(minute);
+      if (!b) {
+        b = newBar(minute);
+        this._byMinute.set(minute, b);
+        this.bars.push(b);
+        if (this.bars.length > 1 && this.bars[this.bars.length - 2].minute > minute) {
+          this.bars.sort((x, y) => x.minute - y.minute);
+        }
+      }
+      return b;
+    }
+    addTrade(tr) {
+      const p = this.params;
+      const b = this.barFor(tr.minute);
+      const product = normalizeProduct(tr.product);
+      const w = contractWeight(product);
+      if (!w) return;
+      if (product === 'TX') {
+        if (b.open == null) b.open = tr.price;
+        b.high = Math.max(b.high, tr.price);
+        b.low = Math.min(b.low, tr.price);
+        b.close = tr.price;
+        b.vol += tr.volume; b.amt += tr.volume * tr.price;
+        this.lastPrice = tr.price;
+      }
+      const eq = tr.volume * w;
+      const side = tr.side;
+      const t = this.totals;
+      if (tr.forceSmall) { // 快照未取樣量：只記錄，不影響大戶 / 散戶統計
+        if (side >= 0) { b.unsBuy += eq; t.unsBuy += eq; } else { b.unsSell += eq; t.unsSell += eq; }
+        return;
+      }
+      const cls = classify(product, tr.volume, p);
+      t.trades++;
+      if (cls === 'big') {
+        b.bigTrades++; t.bigTrades++;
+        if (side > 0) { b.bigBuy += eq; t.bigBuy += eq; } else if (side < 0) { b.bigSell += eq; t.bigSell += eq; } else { b.unkBuy += eq / 2; b.unkSell += eq / 2; }
+      } else if (cls === 'mid') {
+        if (side > 0) { b.midBuy += eq; t.midBuy += eq; } else if (side < 0) { b.midSell += eq; t.midSell += eq; }
+      } else {
+        b.smallTrades++; t.smallTrades++;
+        if (side > 0) { b.smallBuy += eq; t.smallBuy += eq; } else if (side < 0) { b.smallSell += eq; t.smallSell += eq; }
+      }
+    }
+    addTrades(trades) { for (const tr of trades) this.addTrade(tr); }
+  }
+
+  /** 把整天 trades 直接聚合成 bars（回測用） */
+  function buildBars(trades, params) {
+    const fb = new FlowBook(params);
+    fb.addTrades(trades);
+    // 填補沒有 TX 成交的分鐘 close（沿用前值），避免 series 出現 null
+    let last = null;
+    for (const b of fb.bars) {
+      if (b.close == null) { b.open = b.high = b.low = b.close = last; } else last = b.close;
+    }
+    return fb.bars.filter(b => b.close != null);
+  }
+
+  // ---------- 指標序列 ----------
+  function mean(a) { return a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0; }
+  function std(a) {
+    if (a.length < 2) return 0;
+    const m = mean(a);
+    return Math.sqrt(a.reduce((s, x) => s + (x - m) * (x - m), 0) / (a.length - 1));
+  }
+
+  /**
+   * 對 bars 計算：
+   *   bigNet / retailNet（每根 K 淨流）、winBig / winRetail（觀察窗累計）
+   *   zBig / zRetail（以「今日至今每根淨流之標準差 * sqrt(W)」標準化）
+   *   smi = zBig - retailWeight * zRetail
+   *   vwap（大台）、cumBig / cumRetail（日累計）
+   * 回傳與 bars 等長的陣列（前幾根不足 minBarsForZ 時 z = 0）。
+   */
+  function computeSeries(bars, params, breadthByMin) {
+    const p = mergeParams(params);
+    const W = Math.max(1, p.windowMin | 0);
+    const n = bars.length;
+    const out = new Array(n);
+    const bigNetArr = [], retNetArr = [];
+    let cumBig = 0, cumRet = 0, cumAmt = 0, cumVol = 0, lastBreadth = null;
+    const bm = breadthByMin || null;
+    for (let i = 0; i < n; i++) {
+      const b = bars[i];
+      if (bm) { const v = bm[b.minute]; if (v != null && Number.isFinite(Number(v))) lastBreadth = Number(v); }
+      const bigNet = b.bigBuy - b.bigSell;
+      const retNet = b.smallBuy - b.smallSell;
+      bigNetArr.push(bigNet); retNetArr.push(retNet);
+      cumBig += bigNet; cumRet += retNet;
+      cumAmt += b.amt; cumVol += b.vol;
+      let winBig = 0, winRet = 0;
+      for (let j = Math.max(0, i - W + 1); j <= i; j++) { winBig += bigNetArr[j]; winRet += retNetArr[j]; }
+      let zBig = 0, zRet = 0;
+      if (i + 1 >= p.minBarsForZ) {
+        const sB = std(bigNetArr) * Math.sqrt(W);
+        const sR = std(retNetArr) * Math.sqrt(W);
+        zBig = sB > 1e-9 ? winBig / sB : 0;
+        zRet = sR > 1e-9 ? winRet / sR : 0;
+      }
+      const smi = zBig - p.retailWeight * zRet;
+      out[i] = {
+        minute: b.minute, time: b.time, close: b.close,
+        bigNet: round(bigNet, 3), retailNet: round(retNet, 3),
+        winBig: round(winBig, 3), winRetail: round(winRet, 3),
+        zBig: round(zBig, 4), zRetail: round(zRet, 4), smi: round(smi, 4),
+        cumBig: round(cumBig, 3), cumRetail: round(cumRet, 3),
+        vwap: cumVol > 0 ? round(cumAmt / cumVol, 2) : b.close,
+        breadth: lastBreadth,
+      };
+    }
+    return out;
+  }
+
+  /**
+   * 今日大戶心態評分（0-100）與文字判讀。
+   * score = 50 + 60 * 大單淨買比 - 20 * 小單淨買比（散戶反向）
+   */
+  function sentiment(totals) {
+    const t = totals || {};
+    const bigTot = (t.bigBuy || 0) + (t.bigSell || 0);
+    const smTot = (t.smallBuy || 0) + (t.smallSell || 0);
+    const bigRatio = bigTot > 0 ? ((t.bigBuy || 0) - (t.bigSell || 0)) / bigTot : 0;
+    const smRatio = smTot > 0 ? ((t.smallBuy || 0) - (t.smallSell || 0)) / smTot : 0;
+    const score = clamp(50 + 60 * bigRatio - 20 * smRatio, 0, 100);
+    let label, tone;
+    if (bigTot < 20) { label = '樣本不足'; tone = 'neutral'; }
+    else if (score >= 70) { label = '大戶強烈偏多'; tone = 'bull'; }
+    else if (score >= 58) { label = '大戶偏多'; tone = 'bull'; }
+    else if (score <= 30) { label = '大戶強烈偏空'; tone = 'bear'; }
+    else if (score <= 42) { label = '大戶偏空'; tone = 'bear'; }
+    else { label = '大戶中性 / 觀望'; tone = 'neutral'; }
+    let divergence = '';
+    if (bigTot >= 20 && smTot > 0) {
+      if (bigRatio > 0.1 && smRatio < -0.1) divergence = '大戶買、散戶賣 → 聰明錢承接，偏多訊號';
+      else if (bigRatio < -0.1 && smRatio > 0.1) divergence = '大戶賣、散戶買 → 散戶接刀，偏空訊號';
+      else if (bigRatio > 0.1 && smRatio > 0.1) divergence = '大戶散戶同步買，追價需留意過熱';
+      else if (bigRatio < -0.1 && smRatio < -0.1) divergence = '大戶散戶同步賣，弱勢盤';
+    }
+    return {
+      score: round(score, 1), label, tone,
+      bigRatio: round(bigRatio, 4), retailRatio: round(smRatio, 4),
+      bigTotal: round(bigTot, 2), retailTotal: round(smTot, 2), divergence,
+    };
+  }
+
+  // ---------- 模擬盤 ----------
+  /**
+   * PaperTrader：以 1 分 K 收盤價 + 指標做順勢跟單。
+   * onBar(bar, ind) 回傳事件陣列 [{type:'entry'|'exit', side, price, time, reason, pnl?}]
+   * 損益以「點」計，已扣 costPts。
+   */
+  class PaperTrader {
+    constructor(params) {
+      this.p = mergeParams(params);
+      this.pos = null;   // { side: 1|-1, entry, time, minute, bars }
+      this.trades = [];
+      this.lastExitMinute = -1e9;
+      this.dayTrades = 0;
+      this.equity = 0;
+      this.peak = 0; this.maxDD = 0;
+      this._entryCut = hhmmToMin(this.p.entryCutoff);
+      this._flatAt = hhmmToMin(this.p.flatAt);
+    }
+    _close(bar, price, reason) {
+      const pos = this.pos;
+      const gross = (price - pos.entry) * pos.side;
+      const pnl = round(gross - this.p.costPts, 2);
+      const tr = { side: pos.side, entry: pos.entry, exit: price, entryTime: pos.time, exitTime: bar.time, bars: pos.bars, pnl, reason };
+      this.trades.push(tr);
+      this.equity = round(this.equity + pnl, 2);
+      this.peak = Math.max(this.peak, this.equity);
+      this.maxDD = Math.max(this.maxDD, round(this.peak - this.equity, 2));
+      this.pos = null;
+      this.lastExitMinute = bar.minute;
+      return { type: 'exit', side: tr.side, price, time: bar.time, reason, pnl, trade: tr };
+    }
+    onBar(bar, ind) {
+      const p = this.p, ev = [];
+      const px = bar.close;
+      if (px == null) return ev;
+      if (this.pos) {
+        const pos = this.pos; pos.bars++;
+        // 停損 / 停利：用該分鐘高低價判定（觸價成交於停損/停利價）
+        const stopPx = pos.entry - pos.side * p.stopPts;
+        const tgtPx = pos.entry + pos.side * p.targetPts;
+        const hitStop = pos.side > 0 ? bar.low <= stopPx : bar.high >= stopPx;
+        const hitTgt = pos.side > 0 ? bar.high >= tgtPx : bar.low <= tgtPx;
+        if (hitStop) { ev.push(this._close(bar, stopPx, 'stop')); return ev; }
+        if (hitTgt) { ev.push(this._close(bar, tgtPx, 'target')); return ev; }
+        if (bar.minute >= this._flatAt) { ev.push(this._close(bar, px, 'flat')); return ev; }
+        const flip = pos.side > 0 ? ind.smi <= -p.zExit : ind.smi >= p.zExit;
+        if (flip) { ev.push(this._close(bar, px, 'smi-flip')); return ev; }
+        return ev;
+      }
+      // 無部位 → 檢查進場
+      if (bar.minute >= this._entryCut) return ev;
+      if (bar.minute - this.lastExitMinute < p.cooldownMin) return ev;
+      if (this.dayTrades >= p.maxTradesPerDay) return ev;
+      let side = 0;
+      if (ind.smi >= p.zEntry) side = 1;
+      else if (ind.smi <= -p.zEntry) side = -1;
+      if (!side) return ev;
+      if (p.trendFilter && ind.vwap != null) {
+        if (side > 0 && px < ind.vwap) return ev;
+        if (side < 0 && px > ind.vwap) return ev;
+      }
+      // 漲跌家數（市場廣度／類江波圖）過濾：過熱不追多、過冷不追空
+      if (p.breadthFilter && p.breadthLimit > 0 && ind.breadth != null) {
+        if (side > 0 && ind.breadth >= p.breadthLimit) return ev;
+        if (side < 0 && ind.breadth <= -p.breadthLimit) return ev;
+      }
+      this.pos = { side, entry: px, time: bar.time, minute: bar.minute, bars: 0 };
+      this.dayTrades++;
+      ev.push({ type: 'entry', side, price: px, time: bar.time, reason: side > 0 ? '大戶淨買 SMI≥門檻' : '大戶淨賣 SMI≤-門檻', smi: ind.smi });
+      return ev;
+    }
+    stats() {
+      const t = this.trades, n = t.length;
+      const wins = t.filter(x => x.pnl > 0), losses = t.filter(x => x.pnl <= 0);
+      const gw = wins.reduce((s, x) => s + x.pnl, 0), gl = -losses.reduce((s, x) => s + x.pnl, 0);
+      return {
+        trades: n, pnlPts: round(this.equity, 2), pnlNTD: Math.round(this.equity * POINT_VALUE_NTD),
+        winRate: n ? round(wins.length / n, 4) : 0,
+        avgPts: n ? round(this.equity / n, 2) : 0,
+        profitFactor: gl > 0 ? round(gw / gl, 3) : (gw > 0 ? 99 : 0),
+        maxDD: this.maxDD,
+        avgWin: wins.length ? round(gw / wins.length, 2) : 0,
+        avgLoss: losses.length ? round(gl / losses.length, 2) : 0,
+      };
+    }
+  }
+
+  /** 單日回測：trades（逐筆）→ bars → series → PaperTrader */
+  function backtestDay(trades, params, breadthByMin) {
+    const p = mergeParams(params);
+    const bars = buildBars(trades, p);
+    return backtestBars(bars, p, breadthByMin);
+  }
+
+  function backtestBars(bars, params, breadthByMin) {
+    const p = mergeParams(params);
+    const series = computeSeries(bars, p, breadthByMin);
+    const pt = new PaperTrader(p);
+    const events = [];
+    for (let i = 0; i < bars.length; i++) {
+      for (const e of pt.onBar(bars[i], series[i])) events.push(e);
+    }
+    // 收盤仍有部位 → 以最後一根收盤平倉
+    if (pt.pos && bars.length) {
+      const last = bars[bars.length - 1];
+      events.push(pt._close(last, last.close, 'eod'));
+    }
+    return { params: p, bars, series, events, trades: pt.trades, stats: pt.stats() };
+  }
+
+  /**
+   * 多日網格搜尋。
+   * days: [{ date, trades }]；grid: { bigLot:[..], windowMin:[..], zEntry:[..], stopPts:[..], targetPts:[..], retailWeight:[..], trendFilter:[..] }
+   * 排名依據：總損益(點) 為主，同分看 profitFactor、maxDD。
+   */
+  function gridSearch(days, grid, base) {
+    const g = Object.assign({
+      bigLot: [5, 10, 20], windowMin: [5, 10, 15], zEntry: [1, 1.5, 2],
+      stopPts: [20, 30], targetPts: [40, 60], retailWeight: [0.5], trendFilter: [true],
+    }, grid || {});
+    const keys = Object.keys(g);
+    const combos = [];
+    (function rec(i, cur) {
+      if (i === keys.length) { combos.push(Object.assign({}, cur)); return; }
+      for (const v of g[keys[i]]) { cur[keys[i]] = v; rec(i + 1, cur); }
+    })(0, {});
+    // bars 只跟 bigLot / midLot 有關 → 快取
+    const barCache = new Map();
+    const barsFor = (day, bigLot) => {
+      const k = day.date + '|' + bigLot;
+      if (!barCache.has(k)) barCache.set(k, buildBars(day.trades, mergeParams(Object.assign({}, base, { bigLot }))));
+      return barCache.get(k);
+    };
+    const results = [];
+    for (const c of combos) {
+      const p = mergeParams(Object.assign({}, base, c));
+      let pnl = 0, n = 0, wins = 0, gw = 0, gl = 0, dd = 0, eq = 0, peak = 0, posDays = 0;
+      const perDay = [];
+      for (const day of days) {
+        const r = backtestBars(barsFor(day, p.bigLot), p, day.breadth);
+        pnl += r.stats.pnlPts; n += r.stats.trades;
+        for (const t of r.trades) {
+          if (t.pnl > 0) { wins++; gw += t.pnl; } else gl -= t.pnl;
+          eq = round(eq + t.pnl, 2); peak = Math.max(peak, eq); dd = Math.max(dd, round(peak - eq, 2)); // 逐筆回撤
+        }
+        if (r.stats.pnlPts > 0) posDays++;
+        perDay.push({ date: day.date, pnl: r.stats.pnlPts, trades: r.stats.trades });
+      }
+      results.push({
+        params: c, pnlPts: round(pnl, 2), pnlNTD: Math.round(pnl * POINT_VALUE_NTD), trades: n,
+        winRate: n ? round(wins / n, 4) : 0, profitFactor: gl > 0 ? round(gw / gl, 3) : (gw > 0 ? 99 : 0),
+        maxDD: round(dd, 2), avgPts: n ? round(pnl / n, 2) : 0, posDays, days: days.length, perDay,
+      });
+    }
+    results.sort((a, b) => b.pnlPts - a.pnlPts || b.profitFactor - a.profitFactor || a.maxDD - b.maxDD);
+    return results;
+  }
+
+  // ---------- 即時快照 → 取樣成交 ----------
+  /**
+   * FinMind taiwan_futures_snapshot 約 10 秒一筆，欄位：close, volume(最後一筆成交量),
+   * total_volume(累積), buy_price/sell_price(最佳買賣價), TickType(成交種類 1=外盤 2=內盤 0=無法判定)
+   *
+   * 每次輪詢只看得到「最後一筆」成交的口數與方向 → 用它做分類（取樣），
+   * 其餘累積量差額（delta - lastVolume）方向以 quote rule / tick rule 推估，歸入「未取樣」且以小單處理。
+   * 回傳 trades 陣列（0~2 筆）。
+   */
+  function snapshotToTrades(prev, snap, product, opts) {
+    const o = Object.assign({ minute: null, attributeRemainder: true }, opts || {});
+    if (!snap) return [];
+    const price = Number(snap.close);
+    const tv = Number(snap.total_volume);
+    const lastVol = Number(snap.volume) || 0;
+    if (!Number.isFinite(price) || !Number.isFinite(tv)) return [];
+    const t = parseTickTime(snap.date, 0);
+    const minute = o.minute != null ? o.minute : t.minute;
+    const prevTv = prev ? Number(prev.total_volume) : NaN;
+    const delta = Number.isFinite(prevTv) ? tv - prevTv : 0;
+    if (!prev || delta <= 0) return [];
+    let side = 0;
+    const tt = Number(snap.TickType != null ? snap.TickType : snap.tick_type);
+    if (tt === 1) side = 1; else if (tt === 2) side = -1;
+    if (!side) {
+      const bp = Number(snap.buy_price), sp = Number(snap.sell_price);
+      if (Number.isFinite(bp) && Number.isFinite(sp) && bp > 0 && sp > 0) {
+        if (price >= sp) side = 1; else if (price <= bp) side = -1;
+      }
+    }
+    if (!side) side = tickSide(price, Number(prev.close), prev._side || 0);
+    snap._side = side;
+    const out = [];
+    const sampled = Math.min(Math.max(lastVol, 0), delta);
+    if (sampled > 0) out.push({ ms: t.ms, minute, product: normalizeProduct(product), price, volume: sampled, side, sampled: true });
+    const rest = delta - sampled;
+    if (rest > 0 && o.attributeRemainder) {
+      // 未取樣量的方向：用區間均價 (Δtotal_amount / Δtotal_volume) 相對買賣中價判定，較「末筆方向」更能代表整段成交
+      const restSide = intervalSide(prev, snap, delta) || side;
+      out.push({ ms: t.ms, minute, product: normalizeProduct(product), price, volume: rest, side: restSide, sampled: false, forceSmall: true });
+    }
+    return out;
+  }
+
+  /** 由兩次快照的累積金額 / 累積量差，估算區間均價並與中價比較 → +1 / -1 / 0 */
+  function intervalSide(prev, snap, delta) {
+    const a0 = Number(prev.total_amount), a1 = Number(snap.total_amount);
+    if (!Number.isFinite(a0) || !Number.isFinite(a1) || !(delta > 0)) return 0;
+    const dAmt = a1 - a0;
+    if (!(dAmt > 0)) return 0;
+    // 金額欄位可能已乘上契約乘數；用「累積金額 / 累積量 / 收盤價」推估倍率
+    const tv = Number(snap.total_volume), px = Number(snap.close);
+    if (!(tv > 0) || !(px > 0)) return 0;
+    let scale = (a1 / tv) / px;
+    scale = scale > 100 ? 200 : scale > 25 ? 50 : scale > 2.5 ? 5 : 1;
+    const avg = dAmt / delta / scale;
+    const bp = Number(snap.buy_price), sp = Number(snap.sell_price);
+    const mid = (Number.isFinite(bp) && Number.isFinite(sp) && bp > 0 && sp > 0) ? (bp + sp) / 2 : Number(prev.close);
+    if (!Number.isFinite(mid) || !(mid > 0)) return 0;
+    const tol = 0.05; // 5% 檔差以內視為中性
+    if (avg > mid + tol) return 1;
+    if (avg < mid - tol) return -1;
+    return 0;
+  }
+
+  // ---------- 近月契約代碼（TAIFEX：A-L = 1-12 月，尾碼為西元年個位）----------
+  const MONTH_LETTERS = 'ABCDEFGHIJKL';
+  /** 期貨月碼：year 西元年、month0 為 0-11 → 例 (2026,8)=I6 */
+  function futuresMonthCode(year, month0) { return MONTH_LETTERS[month0] + String(year % 10); }
+  /**
+   * 近月契約代碼：prefix 為 TXF/MXF/TMF，date 為 Date（預設 now）。
+   * 結算日（第三個週三）14:00 後改用次月。例：2026-09-07 → TXFI6
+   */
+  function nearMonthContract(prefix, date) {
+    const d = date || new Date();
+    let y = d.getFullYear(), m = d.getMonth();
+    const first = new Date(y, m, 1);
+    const wed = 1 + ((3 - first.getDay() + 7) % 7) + 14; // 當月第三個週三的日期
+    const settled = d.getDate() > wed || (d.getDate() === wed && d.getHours() >= 14);
+    if (settled) { m++; if (m > 11) { m = 0; y++; } }
+    return prefix + futuresMonthCode(y, m);
+  }
+  /** 契約代碼排序鍵（依到期先後）：TXFI6 → 6*12+8 */
+  function contractExpiryKey(code) {
+    const m = String(code).match(/([A-L])(\d)$/);
+    if (!m) return 1e9;
+    return Number(m[2]) * 12 + MONTH_LETTERS.indexOf(m[1]);
+  }
+
+  // ---------- FinMind 盤中逐筆（dataset=TaiwanFutOptTick，data_id 如 TXFI6）----------
+  /**
+   * 每列格式（依 FinMind 官方套件 docstring）：
+   *   { date:'2026-09-07', Time:'11:07:59.569', Close:[47376,47377] 或 47376, Volume:[1,5] 或 1, futopt_id:'TXFR1', TickType:1 }
+   * Close / Volume 可能是陣列、單值或 JSON 字串；TickType 可能是單值或陣列（1=外盤買 2=內盤賣 0=無法判定）。
+   * 每次輪詢會回傳當日至今全部逐筆 → 用 cursor 去重：{ n: 已處理列數, key: 最後一列的識別, lastPrice, lastSide }
+   * 回傳 { trades, cursor }。
+   */
+  function toList(v) {
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'string') {
+      const t = v.trim();
+      if (t.startsWith('[')) { try { const a = JSON.parse(t); if (Array.isArray(a)) return a; } catch (_) { /* fallthrough */ } }
+      if (t.includes(',')) return t.replace(/[\[\]]/g, '').split(',').map(x => Number(x.trim()));
+      return [Number(t)];
+    }
+    if (v == null) return [];
+    return [Number(v)];
+  }
+  function parseFutOptTime(dateStr, timeStr, fallbackMinute) {
+    const d = String(dateStr || '').slice(0, 10);
+    let t = String(timeStr == null ? '' : timeStr).trim();
+    if (!t && /\d{2}:\d{2}/.test(String(dateStr))) return parseTickTime(dateStr, fallbackMinute);
+    if (/^\d{5,9}$/.test(t)) { // HHMMSS 或 HHMMSSmmm（可能少前導 0）
+      t = t.padStart(t.length <= 6 ? 6 : 9, '0');
+      t = `${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}${t.length > 6 ? '.' + t.slice(6) : ''}`;
+    }
+    return parseTickTime(`${d} ${t}`, fallbackMinute);
+  }
+  function rowKey(r, i) { return `${r.Time ?? r.time ?? r.date ?? ''}|${r.price ?? r.Close ?? ''}|${i}`; }
+  function parseFutOptTickRows(rows, product, cursor, opts) {
+    const o = Object.assign({ daySessionOnly: false, start: '08:45', end: '13:45' }, opts || {});
+    const c = Object.assign({ n: 0, key: null, lastPrice: null, lastSide: 0 }, cursor || {});
+    const list = Array.isArray(rows) ? rows : [];
+    const prod = normalizeProduct(product);
+    const startMin = hhmmToMin(o.start), endMin = hhmmToMin(o.end);
+    // 去重：資料為累加式；若列數變少（換日 / 重置）則從頭處理
+    let from = c.n;
+    if (list.length < c.n || (c.n > 0 && c.key != null && rowKey(list[c.n - 1] || {}, c.n - 1) !== c.key)) from = 0;
+    if (from === 0) { c.lastPrice = null; c.lastSide = 0; }
+    const trades = [];
+    for (let i = from; i < list.length; i++) {
+      const r = list[i];
+      const closes = toList(r.Close ?? r.close ?? r.price ?? r.deal_price);
+      const vols = toList(r.Volume ?? r.volume ?? r.qty ?? r.deal_volume);
+      const tts = toList(r.TickType ?? r.tick_type ?? 0);
+      const t = parseFutOptTime(r.date, r.Time ?? r.time, 0);
+      if (o.daySessionOnly && (t.minute < startMin || t.minute > endMin)) continue;
+      const n = Math.max(closes.length, vols.length);
+      for (let k = 0; k < n; k++) {
+        const price = Number(closes[Math.min(k, closes.length - 1)]);
+        const volume = Number(vols[Math.min(k, vols.length - 1)]);
+        if (!Number.isFinite(price) || !(volume > 0)) continue;
+        const tt = Number(tts.length ? tts[Math.min(k, tts.length - 1)] : 0);
+        let side = tt === 1 ? 1 : tt === 2 ? -1 : 0;
+        if (!side) side = tickSide(price, c.lastPrice, c.lastSide);
+        c.lastPrice = price; c.lastSide = side;
+        trades.push({ ms: t.ms, minute: t.minute, product: prod, price, volume, side });
+      }
+    }
+    c.n = list.length;
+    c.key = list.length ? rowKey(list[list.length - 1], list.length - 1) : null;
+    return { trades, cursor: c };
+  }
+
+  /**
+   * FinMind TaiwanFuturesTick（期貨交易明細表）增量解析，作為盤中逐筆的備援來源。
+   * 每列：{ date:'2026-09-07 11:50:29.123', futures_id:'TX', contract_date:'202609', price, volume }
+   * 無 TickType → 一律 Tick Rule。cursor 與 parseFutOptTickRows 相同語意。
+   */
+  function parseFuturesTickRows(rows, product, cursor, opts) {
+    const o = Object.assign({ daySessionOnly: false, start: '08:45', end: '13:45' }, opts || {});
+    const c = Object.assign({ n: 0, key: null, lastPrice: null, lastSide: 0, near: null }, cursor || {});
+    const list = Array.isArray(rows) ? rows : [];
+    const prod = normalizeProduct(product);
+    const startMin = hhmmToMin(o.start), endMin = hhmmToMin(o.end);
+    // 近月契約：資料量還小時每次重算，避免開盤初期樣本不足選錯
+    if (!c.near || c.n < 200) c.near = selectNearContract(list);
+    let from = c.n;
+    if (list.length < c.n || (c.n > 0 && c.key != null && rowKey(list[c.n - 1] || {}, c.n - 1) !== c.key)) from = 0;
+    if (from === 0) { c.lastPrice = null; c.lastSide = 0; c.near = selectNearContract(list); }
+    const trades = [];
+    for (let i = from; i < list.length; i++) {
+      const r = list[i];
+      const cd = String(r.contract_date || '');
+      if (c.near && cd && cd !== c.near) continue;
+      const t = parseTickTime(r.date, 0);
+      if (o.daySessionOnly && (t.minute < startMin || t.minute > endMin)) continue;
+      const price = Number(r.price), volume = Number(r.volume) || 0;
+      if (!Number.isFinite(price) || volume <= 0) continue;
+      const side = tickSide(price, c.lastPrice, c.lastSide);
+      c.lastPrice = price; c.lastSide = side;
+      trades.push({ ms: t.ms, minute: t.minute, product: prod, price, volume, side });
+    }
+    c.n = list.length;
+    c.key = list.length ? rowKey(list[list.length - 1], list.length - 1) : null;
+    return { trades, cursor: c };
+  }
+
+  // ---------- 漲跌家數 / 市場廣度（類江波圖）----------
+  /**
+   * 從 FinMind TaiwanVariousIndicators5Seconds（台股大盤每 5 秒各項指標）解析漲跌家數。
+   * 欄位名不確定 → 容錯比對：含「漲/上漲/up/rise/advance」為上漲家數，含「跌/下跌/down/fall/decline」為下跌家數；
+   * 也接受直接的淨值欄位。回傳 { byMinute:{分:淨漲跌家數}, last:{up,down,net,time} }。
+   * 淨漲跌家數 = 上漲家數 − 下跌家數（每分鐘取最後一筆 5 秒值）。
+   */
+  function pickField(row, positives, negatives) {
+    for (const k of Object.keys(row)) {
+      const key = String(k).toLowerCase();
+      if (negatives && negatives.some(n => key.includes(n))) continue;
+      if (positives.some(pos => key.includes(pos))) {
+        const v = Number(row[k]);
+        if (Number.isFinite(v)) return v;
+      }
+    }
+    return null;
+  }
+  function breadthUpDown(row) {
+    // 先找中文精確欄位
+    let up = null, down = null;
+    for (const k of Object.keys(row)) {
+      const ks = String(k);
+      if (up == null && /(^|[^不])上漲家數|漲家數|advance|rise|up_?num|updn?count|numup/i.test(ks)) { const v = Number(row[k]); if (Number.isFinite(v)) up = v; }
+      if (down == null && /下跌家數|跌家數|decline|fall|down_?num|numdown/i.test(ks)) { const v = Number(row[k]); if (Number.isFinite(v)) down = v; }
+    }
+    if (up == null) up = pickField(row, ['漲', 'up', 'rise', 'advanc'], ['跌', 'down', 'fall', 'declin', '平', 'change', 'index', 'price', 'amount', 'volume', 'trade']);
+    if (down == null) down = pickField(row, ['跌', 'down', 'fall', 'declin'], ['漲', 'up', 'rise', 'advanc', '平', 'change', 'index', 'price', 'amount', 'volume', 'trade']);
+    return { up, down };
+  }
+  function parseBreadthRows(rows, opts) {
+    const o = Object.assign({ fallbackMinute: 0 }, opts || {});
+    const byMinute = {};
+    let last = null;
+    for (const r of (Array.isArray(rows) ? rows : [])) {
+      // 直接淨值欄位（若有）
+      let net = null;
+      for (const k of Object.keys(r)) { if (/net.*(adv|breadth|漲跌)|漲跌家數/i.test(String(k))) { const v = Number(r[k]); if (Number.isFinite(v)) { net = v; break; } } }
+      let up = null, down = null;
+      if (net == null) { const ud = breadthUpDown(r); up = ud.up; down = ud.down; if (up != null && down != null) net = up - down; }
+      if (net == null) continue;
+      const t = parseTickTime(r.date || r.Time || r.time, o.fallbackMinute);
+      byMinute[t.minute] = net;
+      last = { up, down, net, time: (r.date || r.Time || r.time || ''), minute: t.minute };
+    }
+    return { byMinute, last };
+  }
+
+  // ---------- 合成資料（測試 / 示範）----------
+  /** mulberry32：與 Python 版完全相同的 32 位元 PRNG（跨語言一致性檢核用） */
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1) >>> 0;
+      t = (t + (Math.imul(t ^ (t >>> 7), t | 61) >>> 0)) >>> 0;
+      t = (t ^ (t >>> 14)) >>> 0;
+      return t / 4294967296;
+    };
+  }
+
+  /**
+   * 產生一天合成逐筆：帶趨勢與「大戶先行」結構（大單方向領先價格），
+   * 供單元測試與示範模式使用。回傳 { rows: rowsByProduct（FinMind 原始列格式）, regime: 每分鐘的隱含趨勢(+1/0/-1) }
+   */
+  function syntheticDay(seed, opts) {
+    const o = Object.assign({ date: '2026-09-07', basePrice: 24000, minutes: 300, tradesPerMin: 40, drift: 0.15, regimeLen: 45 }, opts || {});
+    const rnd = mulberry32(seed);
+    const rows = { TX: [], MTX: [], TMF: [] };
+    let px = o.basePrice, regime = 0, regimeLeft = 0;
+    const startMin = hhmmToMin('08:45');
+    const regimes = [];
+    for (let m = 0; m < o.minutes; m++) {
+      if (regimeLeft <= 0) { regime = rnd() < 0.5 ? -1 : 1; if (rnd() < 0.3) regime = 0; regimeLeft = o.regimeLen + Math.floor(rnd() * 20); }
+      regimeLeft--;
+      regimes.push(regime);
+      const minute = startMin + m;
+      const hh = String(Math.floor(minute / 60)).padStart(2, '0'), mm = String(minute % 60).padStart(2, '0');
+      const n = o.tradesPerMin + Math.floor(rnd() * 10);
+      for (let k = 0; k < n; k++) {
+        const ss = String(Math.floor((k / n) * 60)).padStart(2, '0');
+        const ts = `${o.date} ${hh}:${mm}:${ss}`;
+        const prodR = rnd();
+        const product = prodR < 0.5 ? 'TX' : prodR < 0.85 ? 'MTX' : 'TMF';
+        let volume, aggressor;
+        if (product === 'TX') {
+          const r = rnd();
+          volume = r < 0.75 ? 1 + Math.floor(rnd() * 2) : r < 0.93 ? 3 + Math.floor(rnd() * 6) : 10 + Math.floor(rnd() * 30);
+          // 大單跟隨 regime（聰明錢），小單反向偏誤
+          const bias = volume >= 10 ? 0.7 : volume >= 3 ? 0.55 : 0.42;
+          aggressor = rnd() < (regime > 0 ? bias : regime < 0 ? 1 - bias : 0.5) ? 1 : -1;
+        } else {
+          volume = 1 + Math.floor(rnd() * 4);
+          const bias = 0.42;
+          aggressor = rnd() < (regime > 0 ? bias : regime < 0 ? 1 - bias : 0.5) ? 1 : -1;
+        }
+        // 價格衝擊與口數(名目)成正比：大單才推得動價格；另加背景趨勢與隨機雜訊
+        const w = product === 'TX' ? 1 : product === 'MTX' ? 0.25 : 0.025;
+        const impactP = Math.min(0.85, 0.04 * volume * w);
+        let step = rnd() < impactP ? aggressor : 0;
+        if (rnd() < o.drift * 0.2) step += regime;
+        if (rnd() < 0.08) step += rnd() < 0.5 ? 1 : -1;
+        px = px + step;
+        rows[product].push({ date: ts, contract_date: '202609', futures_id: product, price: px, volume });
+      }
+    }
+    return { rows, regime: regimes };
+  }
+
+  return {
+    VERSION, CONTRACT_WEIGHT, PRODUCT_ALIAS, POINT_VALUE_NTD, DEFAULT_PARAMS,
+    mergeParams, hhmmToMin, minToHHMM, normalizeProduct, contractWeight, parseTickTime,
+    selectNearContract, tickSide, classify, rowsToTrades, FlowBook, buildBars,
+    computeSeries, sentiment, PaperTrader, backtestDay, backtestBars, gridSearch,
+    snapshotToTrades, intervalSide, parseFutOptTickRows, parseFuturesTickRows, parseFutOptTime, toList,
+    futuresMonthCode, nearMonthContract, contractExpiryKey, parseBreadthRows, mulberry32, syntheticDay, round,
+  };
+});
+
+</script>
+<script>/* js/edge-core.js（內嵌） */
+/*
+ * 台指期機率優勢引擎（瀏覽器 / Node 共用）— 與 edge_engine.py 邏輯 1:1 對應
+ * 回合 / Price to Beat → 多空訊號節點 → 邏輯迴歸 + 類比路徑(kNN) → 扣成本優勢 → walk-forward 樣本外檢驗
+ * 一致性檢核：node tests/edge-parity.js
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.EdgeCore = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+  const VERSION = '1.0.0';
+  const CONTRACTS = { TX: 200, MTX: 50, TMF: 10 };
+  const DEFAULT_PARAMS = {
+    sessionStart: '08:45', sessionEnd: '13:45', roundMin: 60, decisions: [15, 30, 45], threshold: 0.05,
+    contract: 'MTX', feeNtd: 25, taxRate: 0.00002, slipPts: 1.0, sigmaDays: 20, minHistoryDays: 5,
+    minTrainDays: 60, refitDays: 20, l2: 1.0, knnK: 60, knnWeight: 0.5, flowWin: 10,
+  };
+  const BASE_FEATURES = ['zRef', 'mom5', 'zDay', 'vwapDev', 'rangePos', 'gap'];
+  const FLOW_FEATURES = ['flowBig', 'flowRetail'];
+  const FEATURE_LABEL = {
+    zRef: '距回合開盤 (z)', mom5: '5 分動能 (z)', zDay: '距當日開盤 (z)', vwapDev: 'VWAP 乖離 (z)',
+    rangePos: '日內區間位置', gap: '開盤跳空 (z)', flowBig: '大單淨流向 (z)', flowRetail: '散戶淨流向 (z)',
+  };
+
+  const mergeParams = (p) => Object.assign({}, DEFAULT_PARAMS, p || {});
+  const hhmm = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 60 + m; };
+  const minToHHMM = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const clip = (x, lo = -4, hi = 4) => (x < lo ? lo : x > hi ? hi : x);
+  const round = (x, d = 0) => { if (x == null || !Number.isFinite(x)) return x; const f = Math.pow(10, d); return Math.round(x * f) / f; };
+
+  function costPoints(price, p) {
+    const pv = CONTRACTS[p.contract] || 50;
+    return 2 * p.feeNtd / pv + 2 * price * p.taxRate + 2 * p.slipPts;
+  }
+
+  // ------------------------------------------------------------ CSV（1 分 K）
+  function parseCsvDays(text, params) {
+    const p = mergeParams(params);
+    const s0 = hhmm(p.sessionStart), s1 = hhmm(p.sessionEnd);
+    const lines = String(text).replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
+    if (!lines.length) return [];
+    const head = lines[0].split(',').map((h) => h.trim().toLowerCase());
+    const col = (n) => head.indexOf(n);
+    const byDay = {};
+    for (let li = 1; li < lines.length; li++) {
+      const c = lines[li].split(',').map((x) => x.trim());
+      const get = (n) => (col(n) >= 0 ? c[col(n)] : '');
+      let ts = get('datetime') || get('timestamp') || `${get('date')} ${get('time')}`;
+      ts = ts.replace(/\//g, '-').replace('T', ' ').trim();
+      const parts = ts.split(/\s+/);
+      if (parts.length < 2) continue;
+      const hm = parts[1].split(':');
+      const minute = Number(hm[0]) * 60 + Number(hm[1]);
+      const o = Number(get('open')), h = Number(get('high')), l = Number(get('low')), cl = Number(get('close'));
+      if (![minute, o, h, l, cl].every(Number.isFinite) || get('close') === '') continue;
+      if (minute < s0 || minute > s1) continue;
+      const vol = Number(get('volume') || get('vol') || 0) || 0;
+      (byDay[parts[0]] = byDay[parts[0]] || []).push({ minute, open: o, high: h, low: l, close: cl, vol });
+    }
+    return Object.keys(byDay).sort().map((d) => ({ date: d, bars: byDay[d].sort((a, b) => a.minute - b.minute), hasFlow: false }))
+      .filter((d) => d.bars.length >= 30);
+  }
+
+  /** SmartMoney.buildBars 的輸出 → 精簡 1 分 K（含大單 / 散戶淨流向） */
+  function compactBars(smBars) {
+    return smBars.map((b) => ({
+      minute: b.minute, open: b.open, high: b.high, low: b.low, close: b.close, vol: b.vol,
+      bigNet: round(b.bigBuy - b.bigSell, 3), retailNet: round(b.smallBuy - b.smallSell, 3),
+    }));
+  }
+
+  // ------------------------------------------------------------ 合成資料（示範用）
+  function syntheticDays(nDays = 300, seed = 7, edge = 0.0, sigma = 6.0, startPrice = 22000) {
+    let a = seed >>> 0;
+    const rnd = () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const gauss = (mu, sd) => { let u = 0; while (u === 0) u = rnd(); return mu + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd()); };
+    const s0 = hhmm('08:45'), s1 = hhmm('13:45');
+    let px = startPrice;
+    const days = [];
+    for (let d = 0; d < nDays; d++) {
+      px += gauss(0, sigma * 8);
+      const bars = [];
+      let fs = 0;
+      for (let m = s0; m <= s1; m++) {
+        fs = 0.9 * fs + gauss(0, 1);
+        const big = fs * 20 + gauss(0, 10);
+        const retail = -0.3 * big + gauss(0, 15);
+        const drift = edge * sigma * fs / 2.3;
+        const o = px; let hi = o, lo = o;
+        for (let k = 0; k < 4; k++) { px += gauss(drift / 4, sigma / 2); hi = Math.max(hi, px); lo = Math.min(lo, px); }
+        const c = Math.round(px); px = c;
+        bars.push({ minute: m, open: Math.round(o), high: Math.round(hi), low: Math.round(lo), close: c, vol: 500 + rnd() * 500, bigNet: round(big, 3), retailNet: round(retail, 3) });
+      }
+      days.push({ date: `S${String(d).padStart(4, '0')}`, bars, hasFlow: true });
+    }
+    return days;
+  }
+
+  // ------------------------------------------------------------ 特徵 / 樣本
+  function daySigma(bars) {
+    let s = 0, n = 0;
+    for (let i = 1; i < bars.length; i++) { const d = bars[i].close - bars[i - 1].close; s += d * d; n++; }
+    return [s, n];
+  }
+  function flowSigma(bars, key) {
+    let s = 0, n = 0;
+    for (const b of bars) { const v = b[key]; if (v == null) continue; s += v * v; n++; }
+    return [s, n];
+  }
+
+  class DayContext {
+    constructor(bars) {
+      this.bars = bars; this.cumPv = []; this.cumV = []; this.hi = []; this.lo = [];
+      let pv = 0, v = 0, hi = -Infinity, lo = Infinity;
+      for (const b of bars) {
+        const w = b.vol || 1.0;
+        const tp = (b.high + b.low + b.close) / 3;
+        pv += tp * w; v += w; hi = Math.max(hi, b.high); lo = Math.min(lo, b.low);
+        this.cumPv.push(pv); this.cumV.push(v); this.hi.push(hi); this.lo.push(lo);
+      }
+    }
+    lastIndexBefore(minute) {
+      let best = null;
+      for (let i = 0; i < this.bars.length; i++) { if (this.bars[i].minute < minute) best = i; else break; }
+      return best;
+    }
+  }
+
+  function computeFeatures(ctx, i, ref, roundStart, dayOpen, prevClose, sig, fsigBig, fsigRet, hasFlow, p) {
+    const bars = ctx.bars, b = bars[i], px = b.close;
+    const s0 = hhmm(p.sessionStart);
+    const elapsedRound = Math.max(1, b.minute + 1 - roundStart);
+    const elapsedDay = Math.max(1, b.minute + 1 - s0);
+    const j = Math.max(0, i - 5);
+    const vwap = ctx.cumV[i] > 0 ? ctx.cumPv[i] / ctx.cumV[i] : px;
+    const rng = ctx.hi[i] - ctx.lo[i];
+    const f = {
+      zRef: clip((px - ref) / (sig * Math.sqrt(elapsedRound))),
+      mom5: i > j ? clip((px - bars[j].close) / (sig * Math.sqrt(Math.max(1, i - j)))) : 0,
+      zDay: clip((px - dayOpen) / (sig * Math.sqrt(elapsedDay))),
+      vwapDev: clip((px - vwap) / (sig * Math.sqrt(10))),
+      rangePos: rng > 0 ? ((px - ctx.lo[i]) / rng - 0.5) * 2 : 0,
+      gap: prevClose ? clip((dayOpen - prevClose) / (sig * Math.sqrt(300))) : 0,
+    };
+    if (hasFlow) {
+      const W = p.flowWin, lo = Math.max(0, i - W + 1);
+      let wb = 0, wr = 0;
+      for (let k = lo; k <= i; k++) { wb += bars[k].bigNet || 0; wr += bars[k].retailNet || 0; }
+      const n = i - lo + 1;
+      f.flowBig = fsigBig > 0 ? clip(wb / (fsigBig * Math.sqrt(n))) : 0;
+      f.flowRetail = fsigRet > 0 ? clip(wr / (fsigRet * Math.sqrt(n))) : 0;
+    }
+    return f;
+  }
+
+  function roundsOfDay(p) {
+    const s0 = hhmm(p.sessionStart), s1 = hhmm(p.sessionEnd), W = Number(p.roundMin);
+    const maxDec = Math.max(...p.decisions);
+    const out = [];
+    for (let s = s0; s < s1; s += W) { const e = Math.min(s + W, s1); if (e - s >= maxDec + 1) out.push([s, e]); }
+    return out;
+  }
+
+  function buildSamples(days, p) {
+    const hasFlow = days.length > 0 && days.every((d) => d.hasFlow);
+    const feats = BASE_FEATURES.concat(hasFlow ? FLOW_FEATURES : []);
+    const s1 = hhmm(p.sessionEnd);
+    const hist = [], samples = [];
+    let prevClose = null;
+    const rounds = roundsOfDay(p);
+    for (const d of days) {
+      const bars = d.bars;
+      if (hist.length >= p.minHistoryDays) {
+        const recent = hist.slice(-p.sigmaDays);
+        const sum = (k) => recent.reduce((a, h) => a + h[k], 0);
+        const nn = sum(1);
+        const sig = nn ? Math.sqrt(sum(0) / nn) : 0;
+        const fb = Math.sqrt(sum(2) / Math.max(1, sum(3)));
+        const fr = Math.sqrt(sum(4) / Math.max(1, sum(5)));
+        if (sig > 0) {
+          const ctx = new DayContext(bars);
+          const dayOpen = bars[0].open;
+          for (const [rs, re] of rounds) {
+            const inRound = [];
+            bars.forEach((b, k) => { if ((rs <= b.minute && b.minute < re) || (re === s1 && b.minute === s1)) inRound.push(k); });
+            if (inRound.length < 5) continue;
+            const ref = bars[inRound[0]].open, exitPx = bars[inRound[inRound.length - 1]].close;
+            for (const dec of p.decisions) {
+              const i = ctx.lastIndexBefore(rs + dec);
+              if (i == null || i < inRound[0] || i >= inRound[inRound.length - 1]) continue;
+              const px = bars[i].close;
+              const f = computeFeatures(ctx, i, ref, rs, dayOpen, prevClose, sig, fb, fr, hasFlow, p);
+              const fwd = exitPx - px;
+              samples.push({
+                date: d.date, round: `${minToHHMM(rs)}-${minToHHMM(re)}`, dec, time: minToHHMM(bars[i].minute + 1),
+                px, ref, exit: exitPx, fwd, y: fwd > 0 ? 1 : fwd < 0 ? 0 : null, x: feats.map((k) => f[k]),
+              });
+            }
+          }
+        }
+      }
+      const [a, b] = daySigma(bars), [fa, fb2] = flowSigma(bars, 'bigNet'), [ra, rb] = flowSigma(bars, 'retailNet');
+      hist.push([a, b, fa, fb2, ra, rb]);
+      prevClose = bars[bars.length - 1].close;
+    }
+    return { samples, feats };
+  }
+
+  // ------------------------------------------------------------ 模型
+  function solve(A, b) {
+    const n = b.length;
+    const M = A.map((row, i) => row.slice().concat([b[i]]));
+    for (let c = 0; c < n; c++) {
+      let piv = c;
+      for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+      [M[c], M[piv]] = [M[piv], M[c]];
+      if (Math.abs(M[c][c]) < 1e-12) continue;
+      const inv = 1 / M[c][c];
+      for (let r = 0; r < n; r++) {
+        if (r !== c && M[r][c] !== 0) { const f = M[r][c] * inv; for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; }
+      }
+    }
+    return M.map((row, i) => (Math.abs(row[i]) > 1e-12 ? row[n] / row[i] : 0));
+  }
+  const sigmoid = (z) => (z >= 0 ? 1 / (1 + Math.exp(-z)) : Math.exp(z) / (1 + Math.exp(z)));
+
+  function fitLogistic(X, y, l2 = 1.0, iters = 30) {
+    const k = X[0].length, n = X.length;
+    const mu = [], sd = [];
+    for (let j = 0; j < k; j++) {
+      let s = 0; for (const r of X) s += r[j]; mu.push(s / n);
+      let v = 0; for (const r of X) v += (r[j] - mu[j]) ** 2;
+      sd.push(Math.sqrt(v / Math.max(1, n - 1)) || 1.0);
+    }
+    const Z = X.map((r) => [1].concat(r.map((v, j) => (v - mu[j]) / sd[j])));
+    let w = new Array(k + 1).fill(0);
+    for (let it = 0; it < iters; it++) {
+      const g = new Array(k + 1).fill(0);
+      const H = Array.from({ length: k + 1 }, () => new Array(k + 1).fill(0));
+      for (let s = 0; s < Z.length; s++) {
+        const zi = Z[s];
+        let lin = 0; for (let a = 0; a <= k; a++) lin += w[a] * zi[a];
+        const pi = sigmoid(lin), r = y[s] - pi, wt = pi * (1 - pi);
+        for (let a = 0; a <= k; a++) {
+          g[a] += r * zi[a];
+          const za = zi[a] * wt, Ha = H[a];
+          for (let b = a; b <= k; b++) Ha[b] += za * zi[b];
+        }
+      }
+      for (let a = 0; a <= k; a++) for (let b = 0; b < a; b++) H[a][b] = H[b][a];
+      for (let a = 1; a <= k; a++) { g[a] -= l2 * w[a]; H[a][a] += l2; }
+      const step = solve(H, g);
+      w = w.map((v, i) => v + step[i]);
+      if (Math.max(...step.map(Math.abs)) < 1e-7) break;
+    }
+    return { w, mu, sd };
+  }
+  function predictLogistic(m, x) {
+    const contrib = x.map((v, j) => m.w[j + 1] * ((v - m.mu[j]) / m.sd[j]));
+    return [sigmoid(m.w[0] + contrib.reduce((a, b) => a + b, 0)), contrib];
+  }
+
+  /** 類比路徑：標準化特徵空間中最像的 K 個歷史情境，數多頭 / 空頭路徑 */
+  class KnnPaths {
+    constructor(X, y, mu, sd, k = 60) {
+      this.k = k; this.ok = X.length >= k; this.mu = mu; this.sd = sd;
+      const dim = mu.length;
+      this.n = X.length; this.dim = dim;
+      this.Z = new Float64Array(X.length * dim);
+      for (let i = 0; i < X.length; i++) for (let j = 0; j < dim; j++) this.Z[i * dim + j] = (X[i][j] - mu[j]) / sd[j];
+      this.y = Float64Array.from(y);
+      this.d = new Float64Array(X.length);
+      this.idx = new Uint32Array(X.length);
+    }
+    predict(x) {
+      if (!this.ok) return [null, 0, 0];
+      const { dim, n, Z, d, k } = this;
+      const z = x.map((v, j) => (v - this.mu[j]) / this.sd[j]);
+      for (let i = 0; i < n; i++) { let s = 0; const o = i * dim; for (let j = 0; j < dim; j++) { const t = Z[o + j] - z[j]; s += t * t; } d[i] = s; }
+      // 第 k 小的距離（quickselect on index array）
+      const idx = this.idx; for (let i = 0; i < n; i++) idx[i] = i;
+      let lo = 0, hi = n - 1;
+      while (lo < hi) {
+        const pv = d[idx[(lo + hi) >> 1]];
+        let i = lo, j = hi;
+        while (i <= j) { while (d[idx[i]] < pv) i++; while (d[idx[j]] > pv) j--; if (i <= j) { const t = idx[i]; idx[i] = idx[j]; idx[j] = t; i++; j--; } }
+        if (k - 1 <= j) hi = j; else if (k - 1 >= i) lo = i; else break;
+      }
+      let bull = 0; for (let i = 0; i < k; i++) bull += this.y[idx[i]];
+      return [(bull + 1) / (k + 2), bull, k - bull];
+    }
+  }
+  const ensemble = (pl, pk, wk) => (pk == null ? pl : (1 - wk) * pl + wk * pk);
+
+  // ------------------------------------------------------------ Walk-forward
+  async function walkForward(samples, p, onProgress) {
+    const dates = Array.from(new Set(samples.map((s) => s.date))).sort();
+    if (dates.length <= p.minTrainDays) throw new Error(`交易日太少：${dates.length} 天（需 > 最少訓練天數 ${p.minTrainDays}）`);
+    const byDate = {};
+    for (const s of samples) (byDate[s.date] = byDate[s.date] || []).push(s);
+    const out = [];
+    for (let i = p.minTrainDays; i < dates.length; i += p.refitDays) {
+      const train = [];
+      for (const d of dates.slice(0, i)) for (const s of byDate[d]) if (s.y != null) train.push(s);
+      const X = train.map((s) => s.x), y = train.map((s) => s.y);
+      const m = fitLogistic(X, y, p.l2);
+      const knn = new KnnPaths(X, y, m.mu, m.sd, p.knnK);
+      for (const d of dates.slice(i, i + p.refitDays)) {
+        for (const s of byDate[d]) {
+          const [pl] = predictLogistic(m, s.x);
+          const [pk, bull, bear] = knn.predict(s.x);
+          out.push(Object.assign({}, s, { pLog: pl, pKnn: pk, bull, bear, p: ensemble(pl, pk, p.knnWeight) }));
+        }
+      }
+      if (onProgress) await onProgress(Math.min(1, (i + p.refitDays - p.minTrainDays) / (dates.length - p.minTrainDays)));
+    }
+    return out;
+  }
+
+  function simulateTrades(preds, p, threshold) {
+    const th = threshold == null ? p.threshold : threshold;
+    const pv = CONTRACTS[p.contract] || 50;
+    const taken = new Set(), trades = [];
+    for (const s of preds) {
+      const key = s.date + '|' + s.round;
+      if (taken.has(key)) continue;
+      const edge = s.p - 0.5;
+      if (Math.abs(edge) < th || (th === 0 && edge === 0)) continue;
+      const side = edge > 0 ? 1 : -1;
+      const gross = side * s.fwd, net = gross - costPoints(s.px, p);
+      taken.add(key);
+      trades.push({ date: s.date, round: s.round, time: s.time, side, p: round(s.p, 4), entry: s.px, exit: s.exit, ref: s.ref,
+        grossPts: round(gross, 2), netPts: round(net, 2), netNtd: Math.round(net * pv) });
+    }
+    return trades;
+  }
+
+  function tradeStats(trades, p) {
+    const n = trades.length;
+    if (!n) return { n: 0 };
+    const pv = CONTRACTS[p.contract] || 50;
+    const net = trades.map((t) => t.netPts), gross = trades.map((t) => t.grossPts);
+    const wins = net.filter((x) => x > 0), losses = net.filter((x) => x <= 0);
+    const sum = (a) => a.reduce((x, y) => x + y, 0);
+    const mean = sum(net) / n;
+    const sd = n > 1 ? Math.sqrt(net.reduce((a, x) => a + (x - mean) ** 2, 0) / (n - 1)) : 0;
+    const byDay = {};
+    for (const t of trades) byDay[t.date] = (byDay[t.date] || 0) + t.netPts;
+    const dv = Object.values(byDay), dm = sum(dv) / dv.length;
+    const dsd = dv.length > 1 ? Math.sqrt(dv.reduce((a, x) => a + (x - dm) ** 2, 0) / (dv.length - 1)) : 0;
+    let eq = 0, peak = 0, mdd = 0;
+    for (const x of net) { eq += x; peak = Math.max(peak, eq); mdd = Math.max(mdd, peak - eq); }
+    const sl = sum(losses);
+    return {
+      n, winRate: round(wins.length / n, 4), grossWinRate: round(gross.filter((x) => x > 0).length / n, 4),
+      avgGrossPts: round(sum(gross) / n, 3), avgNetPts: round(mean, 3), totalNetPts: round(sum(net), 1), totalNetNtd: Math.round(sum(net) * pv),
+      avgWinPts: wins.length ? round(sum(wins) / wins.length, 2) : 0, avgLossPts: losses.length ? round(sl / losses.length, 2) : 0,
+      profitFactor: losses.length && sl < 0 ? round(sum(wins) / -sl, 3) : null,
+      tStat: sd > 0 ? round(mean / (sd / Math.sqrt(n)), 3) : null, sharpeAnnual: dsd > 0 ? round(dm / dsd * Math.sqrt(250), 3) : null,
+      maxDrawdownPts: round(mdd, 1), maxDrawdownNtd: Math.round(mdd * pv), tradingDays: dv.length,
+    };
+  }
+
+  function probMetrics(preds) {
+    const lab = preds.filter((s) => s.y != null);
+    const n = lab.length;
+    if (!n) return { n: 0 };
+    const brier = (k) => lab.reduce((a, s) => a + (s[k] - s.y) ** 2, 0) / n;
+    const ll = (k) => -lab.reduce((a, s) => a + Math.log(Math.max(1e-6, s.y ? s[k] : 1 - s[k])), 0) / n;
+    const out = {
+      n, baseRateUp: round(lab.reduce((a, s) => a + s.y, 0) / n, 4), brierCoin: 0.25,
+      brierModel: round(brier('p'), 5), brierLogit: round(brier('pLog'), 5), logLossCoin: round(Math.log(2), 5), logLossModel: round(ll('p'), 5),
+      hitRate: round(lab.filter((s) => (s.p > 0.5) === (s.y === 1)).length / n, 4),
+    };
+    if (lab.every((s) => s.pKnn != null)) out.brierKnn = round(brier('pKnn'), 5);
+    out.skill = round(1 - out.brierModel / 0.25, 5);
+    return out;
+  }
+
+  function calibration(preds, edges = [0, 0.35, 0.4, 0.45, 0.48, 0.5, 0.52, 0.55, 0.6, 0.65, 1.0001]) {
+    const out = [];
+    for (let i = 0; i < edges.length - 1; i++) {
+      const lo = edges[i], hi = edges[i + 1];
+      const grp = preds.filter((s) => lo <= s.p && s.p < hi);
+      if (!grp.length) continue;
+      const lab = grp.filter((s) => s.y != null);
+      out.push({ lo, hi: Math.min(hi, 1), n: grp.length, predicted: round(grp.reduce((a, s) => a + s.p, 0) / grp.length, 4),
+        realized: lab.length ? round(lab.reduce((a, s) => a + s.y, 0) / lab.length, 4) : null,
+        avgFwdPts: round(grp.reduce((a, s) => a + s.fwd, 0) / grp.length, 2) });
+    }
+    return out;
+  }
+
+  function thresholdTable(preds, p) {
+    return [0, 0.02, 0.04, 0.05, 0.06, 0.08, 0.10, 0.12, 0.15, 0.20].map((th) => {
+      const st = tradeStats(simulateTrades(preds, p, th), p);
+      return { threshold: th, n: st.n, winRate: st.winRate, avgGrossPts: st.avgGrossPts, avgNetPts: st.avgNetPts, totalNetNtd: st.totalNetNtd, tStat: st.tStat, profitFactor: st.profitFactor };
+    });
+  }
+
+  function equityCurve(trades) {
+    const byDay = {};
+    for (const t of trades) byDay[t.date] = (byDay[t.date] || 0) + t.netNtd;
+    let eq = 0;
+    return Object.keys(byDay).sort().map((d) => ({ date: d, equity: (eq += byDay[d]) }));
+  }
+
+  function kellyFraction(st) {
+    if (!st.n || !st.avgLossPts || st.avgLossPts >= 0) return null;
+    const b = st.avgWinPts / -st.avgLossPts;
+    if (!b) return null;
+    return round(Math.max(0, (st.winRate * b - (1 - st.winRate)) / b), 4);
+  }
+
+  function verdict(pm, st) {
+    const reasons = []; let good = true;
+    if (!(pm.skill > 0)) { good = false; reasons.push(`機率預測沒有勝過擲硬幣（Brier ${pm.brierModel} vs 0.25）`); }
+    else reasons.push(`機率預測略勝擲硬幣（Brier skill ${pm.skill.toFixed(4)}）`);
+    if (!st.n) { good = false; reasons.push('門檻下沒有任何交易'); }
+    else {
+      if (st.avgNetPts <= 0) { good = false; reasons.push(`扣成本後平均每筆 ${st.avgNetPts} 點（≤ 0）`); }
+      const t = st.tStat || 0;
+      if (t < 2) { good = false; reasons.push(`交易 t 值 ${t}（< 2，無法排除運氣）`); } else reasons.push(`交易 t 值 ${t}（≥ 2）`);
+      if (st.n < 200) reasons.push(`樣本只有 ${st.n} 筆，大數法則尚未發揮`);
+    }
+    return { edgeFound: good, label: good ? '樣本外有統計顯著優勢（仍需紙上交易驗證）' : '未發現可交易的優勢', reasons };
+  }
+
+  async function runBacktest(days, params, source, onProgress) {
+    const p = mergeParams(params);
+    const t0 = Date.now();
+    const { samples, feats } = buildSamples(days, p);
+    if (!samples.length) throw new Error('沒有樣本（資料天數不足或回合設定過長）');
+    const preds = await walkForward(samples, p, onProgress);
+    const trades = simulateTrades(preds, p);
+    const st = tradeStats(trades, p), pm = probMetrics(preds);
+    const lab = samples.filter((s) => s.y != null);
+    const final = fitLogistic(lab.map((s) => s.x), lab.map((s) => s.y), p.l2);
+    const oos = Array.from(new Set(preds.map((s) => s.date))).sort();
+    const lastBars = days[days.length - 1].bars;
+    return {
+      version: VERSION, updated: new Date().toISOString().slice(0, 16).replace('T', ' '), source,
+      range: { from: days[0].date, to: days[days.length - 1].date, days: days.length, oosFrom: oos[0], oosTo: oos[oos.length - 1], oosDays: oos.length },
+      params: p, costPtsRoundTrip: round(costPoints(lastBars[lastBars.length - 1].close, p), 2), pointValue: CONTRACTS[p.contract] || 50,
+      samples: samples.length, oosSamples: preds.length, features: feats,
+      probability: pm, trades: st, verdict: verdict(pm, st), kelly: kellyFraction(st),
+      lattice: calibration(preds), thresholds: thresholdTable(preds, p),
+      weights: feats.map((f, j) => ({ feature: f, label: FEATURE_LABEL[f] || f, coef: round(final.w[j + 1], 4) })),
+      equity: equityCurve(trades), recentTrades: trades.slice(-40), allTrades: trades,
+      elapsedSec: round((Date.now() - t0) / 1000, 1),
+    };
+  }
+
+  return {
+    VERSION, CONTRACTS, DEFAULT_PARAMS, BASE_FEATURES, FLOW_FEATURES, FEATURE_LABEL,
+    mergeParams, hhmm, minToHHMM, costPoints, parseCsvDays, compactBars, syntheticDays,
+    DayContext, computeFeatures, roundsOfDay, buildSamples, fitLogistic, predictLogistic, KnnPaths, ensemble,
+    walkForward, simulateTrades, tradeStats, probMetrics, calibration, thresholdTable, equityCurve, kellyFraction, verdict, runBacktest, round,
+  };
+});
+
+</script>
+<style>
+:root{--bg:#0a0e1a;--panel:#111827;--panel2:#0d1422;--border:#1f2d40;--accent:#00d4ff;--green:#00ff88;--red:#ff4d6d;--amber:#ffb020;--text:#e2e8f0;--muted:#8a9bb3}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;font-size:14px;line-height:1.5}
+.wrap{max-width:1100px;margin:0 auto;padding:16px;padding-bottom:calc(32px + env(safe-area-inset-bottom))}
+h1{font-size:20px;margin:0}
+h2{font-size:15px;margin:0 0 10px;color:var(--accent)}
+.sub{color:var(--muted);font-size:12px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:14px}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+label.f{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+input,select{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px 10px;font-size:15px;font-family:inherit}
+input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:14px;font-family:inherit;cursor:pointer;min-height:42px}
+button.primary{background:var(--accent);color:#001018;border-color:var(--accent);font-weight:700}
+button:disabled{opacity:.45;cursor:not-allowed}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.kpi{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px}
+.kpi .l{color:var(--muted);font-size:11px}
+.kpi .v{font-size:19px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.pos{color:var(--green)}.neg{color:var(--red)}
+.verdict{padding:12px;border-radius:8px;font-weight:700}
+.verdict.ok{background:#00ff8814;border:1px solid #00ff8855}
+.verdict.no{background:#ff4d6d14;border:1px solid #ff4d6d55}
+.verdict ul{margin:6px 0 0;padding-left:18px;font-weight:400;color:var(--muted)}
+.warn{background:#ffb02014;border:1px solid #ffb02055;color:#ffd27a;padding:10px;border-radius:8px;font-size:13px}
+.msg{padding:8px 10px;border-radius:6px;font-size:13px;margin-top:8px}
+.msg.ok{background:#00ff8814;color:var(--green)}.msg.err{background:#ff4d6d14;color:#ff9aac}.msg.info{background:#00d4ff14;color:var(--accent)}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:6px 8px;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:500;font-size:12px}
+tr.sel td{background:#00d4ff14}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.two>*{min-width:0}
+@media(max-width:760px){.two{grid-template-columns:minmax(0,1fr)}.wrap{padding:12px}}
+.chart{position:relative;height:260px}
+.bar{height:10px;border-radius:3px}
+.prog{height:8px;background:var(--panel2);border-radius:4px;overflow:hidden;margin-top:10px}
+.prog > div{height:100%;width:0;background:var(--accent);transition:width .2s}
+pre.log{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:8px;max-height:180px;overflow:auto;font-size:11px;color:var(--muted);white-space:pre-wrap;margin:10px 0 0}
+details summary{cursor:pointer;color:var(--accent);margin:10px 0 6px}
+.hidden{display:none}
+.how{color:var(--muted);line-height:1.7;font-size:13px}
+.how b{color:var(--text)}
+code{background:var(--panel2);padding:1px 5px;border-radius:4px}
+@media print{body{background:#fff;color:#000}.noprint{display:none!important}.panel{border-color:#ccc;background:#fff}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="justify-content:space-between">
+    <div><h1>🎯 台指期機率優勢回測 <span class="sub">獨立版 2026-11-12</span></h1>
+      <div class="sub">回合 Price to Beat · 多空訊號節點 · 類比路徑機率 · 扣成本優勢 · walk-forward 樣本外檢驗。全部在你的瀏覽器裡計算。</div></div>
+  </div>
+
+  <!-- 1. Token -->
+  <div class="panel noprint">
+    <h2>① FinMind Token（sponsor 方案）</h2>
+    <div class="row">
+      <input id="token" type="password" placeholder="貼上 FinMind sponsor token" autocomplete="off" style="flex:1;min-width:220px">
+      <button id="btnShow" type="button">顯示</button>
+      <button id="btnSaveTok" type="button">儲存</button>
+      <button id="btnCheck" type="button">檢查權限</button>
+    </div>
+    <div class="sub" style="margin-top:6px">Token 只存在這台裝置的瀏覽器裡（和聰明錢看板共用），由瀏覽器直接連 FinMind，不會經過其他伺服器。</div>
+    <div id="tokMsg"></div>
+  </div>
+
+  <!-- 2. 資料 -->
+  <div class="panel noprint">
+    <h2>② 資料</h2>
+    <div class="form">
+      <div><label class="f">資料來源</label>
+        <select id="src"><option value="finmind">FinMind 逐筆（sponsor）</option><option value="csv">上傳 1 分 K CSV</option><option value="demo">示範合成資料</option></select></div>
+      <div class="srcFm"><label class="f">開始日</label><input id="dStart" type="date"></div>
+      <div class="srcFm"><label class="f">結束日</label><input id="dEnd" type="date"></div>
+      <div class="srcFm"><label class="f">商品</label>
+        <select id="mode"><option value="tx">只抓大台 TX（快，含大單流向）</option><option value="all">TX + 小台 + 微台（完整散戶流向，慢 3 倍）</option></select></div>
+      <div class="srcCsv hidden" style="grid-column:1/-1"><label class="f">CSV 檔（datetime,open,high,low,close,volume；只取日盤 08:45–13:45）</label><input id="csvFile" type="file" accept=".csv,text/csv"></div>
+    </div>
+    <div class="sub srcFm" id="estimate" style="margin-top:8px"></div>
+    <div class="row srcFm" style="margin-top:8px">
+      <span class="sub" id="cacheInfo">快取：—</span>
+      <button id="btnClearCache" type="button">清除快取</button>
+    </div>
+  </div>
+
+  <!-- 3. 參數 -->
+  <div class="panel noprint">
+    <h2>③ 策略參數</h2>
+    <div class="form">
+      <div><label class="f">回合長度（分）</label><select id="pRound"><option>15</option><option>30</option><option selected>60</option><option>90</option><option>150</option><option>300</option></select></div>
+      <div><label class="f">決策點（回合內第幾分，逗號分隔）</label><input id="pDec" value="15,30,45"></div>
+      <div><label class="f">進場門檻 |P − 0.5| ≥</label><input id="pTh" type="number" step="0.01" min="0" max="0.4" value="0.05"></div>
+      <div><label class="f">契約</label><select id="pContract"><option value="TX">大台 TX（200 元/點）</option><option value="MTX" selected>小台 MTX（50 元/點）</option><option value="TMF">微台 TMF（10 元/點）</option></select></div>
+      <div><label class="f">單邊手續費（元/口）</label><input id="pFee" type="number" step="1" min="0" value="25"></div>
+      <div><label class="f">單邊滑價（點）</label><input id="pSlip" type="number" step="0.5" min="0" value="1"></div>
+    </div>
+    <details><summary>進階</summary>
+      <div class="form">
+        <div><label class="f">最少訓練天數</label><input id="pMinTrain" type="number" min="20" value="60"></div>
+        <div><label class="f">每幾天重訓</label><input id="pRefit" type="number" min="5" value="20"></div>
+        <div><label class="f">類比路徑數 K</label><input id="pK" type="number" min="10" value="60"></div>
+        <div><label class="f">kNN 權重（0 = 只用邏輯迴歸）</label><input id="pKw" type="number" step="0.1" min="0" max="1" value="0.5"></div>
+        <div><label class="f">L2 懲罰</label><input id="pL2" type="number" step="0.5" min="0" value="1"></div>
+        <div><label class="f">流向累計視窗（分）</label><input id="pFlow" type="number" min="1" value="10"></div>
+      </div>
+    </details>
+    <div class="row" style="margin-top:12px">
+      <button id="btnRun" class="primary" type="button">▶ 開始回測</button>
+      <button id="btnStop" type="button" disabled>■ 停止</button>
+      <span class="sub" id="status"></span>
+    </div>
+    <div class="prog"><div id="progBar"></div></div>
+    <pre class="log" id="log"></pre>
+  </div>
+
+  <!-- 4. 報告 -->
+  <div id="report" class="hidden">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">④ 回測報告</h2>
+        <div class="row noprint">
+          <button id="btnDlHtml" type="button">⬇ 報告 HTML</button>
+          <button id="btnDlCsv" type="button">⬇ 交易 CSV</button>
+          <button id="btnDlJson" type="button">⬇ JSON</button>
+          <button id="btnPrint" type="button">🖨 列印 / PDF</button>
+        </div>
+      </div>
+      <div class="sub" id="meta" style="margin-top:6px"></div>
+      <div id="synthWarn"></div>
+      <div id="verdict" style="margin-top:10px"></div>
+      <div class="grid" id="kpis" style="margin-top:12px"></div>
+    </div>
+    <div class="two">
+      <div class="panel"><h2>機率校準格（Probability Lattice）</h2>
+        <div class="sub">樣本外：模型說 X% 會漲時，實際漲了幾 %。點落在對角線上，機率才可信。</div>
+        <div class="chart"><canvas id="cLattice"></canvas></div></div>
+      <div class="panel"><h2>權益曲線（扣成本，新台幣，每筆 1 口）</h2>
+        <div class="sub">只含 walk-forward 樣本外交易</div>
+        <div class="chart"><canvas id="cEquity"></canvas></div></div>
+    </div>
+    <div class="two">
+      <div class="panel"><h2>門檻表：優勢多大才下單</h2>
+        <div class="sub">事後挑最好的一列等於過度擬合，請看整體趨勢。</div>
+        <div class="scroll"><table id="tTh"></table></div></div>
+      <div class="panel"><h2>訊號節點權重（多 / 空）</h2>
+        <div class="sub">全樣本邏輯迴歸的標準化係數：正值代表數值越大越偏多</div>
+        <div id="weights"></div></div>
+    </div>
+    <div class="panel"><h2>最近交易（樣本外）</h2><div class="scroll"><table id="tTrades"></table></div></div>
+  </div>
+
+  <div class="panel how noprint"><h2>原理與判讀</h2>
+    <b>1. 回合</b>：日盤切成每 N 分鐘一回合，回合開盤價 = Price to Beat。<br>
+    <b>2. 訊號節點</b>：距回合開盤、5 分動能、距當日開盤、VWAP 乖離、區間位置、跳空，再加上逐筆資料算出的大單 / 散戶淨流向。<br>
+    <b>3. 機率</b>：邏輯迴歸，加上「類比路徑」（歷史上最像的 K 個情境裡，往上幾條、往下幾條），兩者平均得到 P(上漲)。<br>
+    <b>4. 優勢</b>：期貨的公平價 = 50%。|P − 0.5| ≥ 門檻才進場，持有到回合結束，並扣掉手續費、期交稅（十萬分之二）和滑價。<br>
+    <b>5. 大數法則</b>：只看樣本外結果。Brier 要 &lt; 0.25（擲硬幣）、t 值 ≥ 2，樣本數也要夠多，才算有優勢。<br>
+    資料量：大台一天的逐筆約數 MB 到十多 MB。第一次跑半年要下載一陣子，下載過的日子會壓縮成 1 分 K 存在瀏覽器，之後就是秒算。手機請保持螢幕開啟。
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const FINMIND = 'https://api.finmindtrade.com/api/v4';
+const LS_P = 'edge_params_v1';
+const fmt = (x, d = 0) => x == null || !Number.isFinite(Number(x)) ? '—' : Number(x).toLocaleString('zh-TW', { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (x, d = 1) => x == null ? '—' : (x * 100).toFixed(d) + '%';
+const cls = (x) => x > 0 ? 'pos' : x < 0 ? 'neg' : '';
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
+
+// ---------------- 日誌 / 狀態 ----------------
+const logs = [];
+function log(m) { logs.push(`[${new Date().toLocaleTimeString('zh-TW', { hour12: false })}] ${m}`); if (logs.length > 400) logs.shift(); const el = $('log'); el.textContent = logs.slice(-150).join('\n'); el.scrollTop = el.scrollHeight; }
+function status(t) { $('status').textContent = t; }
+function prog(f) { $('progBar').style.width = `${Math.max(0, Math.min(1, f)) * 100}%`; }
+function msg(id, text, kind) { $(id).innerHTML = text ? `<div class="msg ${kind || 'info'}">${text}</div>` : ''; }
+
+// ---------------- Token ----------------
+$('token').value = lsGet('finmindToken') || '';
+$('btnShow').onclick = () => { const t = $('token'); t.type = t.type === 'password' ? 'text' : 'password'; $('btnShow').textContent = t.type === 'password' ? '顯示' : '隱藏'; };
+$('btnSaveTok').onclick = () => { lsSet('finmindToken', $('token').value.trim()); msg('tokMsg', '已儲存在這台裝置。', 'ok'); };
+const token = () => $('token').value.trim();
+
+async function finmind(params, ms) {
+  const q = new URLSearchParams(params);
+  if (token()) q.set('token', token());
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms || 120000);
+  try {
+    const r = await fetch(`${FINMIND}/data?${q}`, { signal: ctl.signal });
+    const j = await r.json().catch(() => ({}));
+    if (j && (j.status === 200 || Array.isArray(j.data))) return j.data || [];
+    throw new Error(j.msg || j.error || `HTTP ${r.status}`);
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('逾時');
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+const isPermErr = (m) => /illegal|permission|sponsor|level|付費|權限|upgrade/i.test(String(m));
+
+async function tradingDays(start, end) {
+  try {
+    const rows = await finmind({ dataset: 'TaiwanStockTradingDate', start_date: start, end_date: end }, 30000);
+    const d = rows.map((r) => r.date).filter((x) => x >= start && x <= end);
+    if (d.length) return d;
+  } catch (e) { log(`交易日曆取得失敗，改用平日：${e.message}`); }
+  const out = []; const d = new Date(start + 'T00:00:00'), e = new Date(end + 'T00:00:00');
+  for (; d <= e; d.setDate(d.getDate() + 1)) if (d.getDay() % 6) out.push(ymd(d));
+  return out;
+}
+
+$('btnCheck').onclick = async () => {
+  $('btnCheck').disabled = true;
+  try {
+    if (!token()) throw new Error('請先貼上 Token');
+    msg('tokMsg', '檢查中…（會下載一天微台逐筆測試權限）', 'info');
+    const free = await finmind({ dataset: 'TaiwanStockTradingDate', start_date: '2026-01-01', end_date: '2026-01-10' }, 20000);
+    const end = ymd(new Date()); const s = new Date(); s.setDate(s.getDate() - 14);
+    const days = await tradingDays(ymd(s), end);
+    let found = null;
+    for (const d of days.reverse().slice(0, 4)) {
+      const rows = await finmind({ dataset: 'TaiwanFuturesTick', data_id: 'TMF', start_date: d, end_date: d }, 120000);
+      if (rows.length) { found = { d, n: rows.length }; break; }
+    }
+    lsSet('finmindToken', token());
+    msg('tokMsg', found ? `✅ Token 有效，逐筆權限 OK（${found.d} 微台 ${found.n.toLocaleString()} 筆）。Token 已儲存。` : `⚠️ Token 可用（免費資料 ${free.length} 筆），但最近幾天抓不到逐筆，可能資料尚未更新。`, found ? 'ok' : 'info');
+  } catch (e) {
+    msg('tokMsg', isPermErr(e.message) ? `❌ 沒有逐筆權限：${esc(e.message)}。TaiwanFuturesTick 需要 sponsor 方案。` : `❌ ${esc(e.message)}`, 'err');
+  } finally { $('btnCheck').disabled = false; }
+};
+
+// ---------------- IndexedDB 快取（1 分 K） ----------------
+const DB = {
+  db: null,
+  async open() {
+    if (this.db) return this.db;
+    this.db = await new Promise((res) => {
+      try {
+        const rq = indexedDB.open('edge_bars', 1);
+        rq.onupgradeneeded = () => rq.result.createObjectStore('bars');
+        rq.onsuccess = () => res(rq.result);
+        rq.onerror = () => res(null);
+      } catch (_) { res(null); }
+    });
+    return this.db;
+  },
+  async op(mode, fn) {
+    const db = await this.open(); if (!db) return null;
+    return new Promise((res) => {
+      try { const tx = db.transaction('bars', mode); const rq = fn(tx.objectStore('bars')); rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null); }
+      catch (_) { res(null); }
+    });
+  },
+  get(k) { return this.op('readonly', (s) => s.get(k)); },
+  put(k, v) { return this.op('readwrite', (s) => s.put(v, k)); },
+  keys() { return this.op('readonly', (s) => s.getAllKeys()); },
+  clear() { return this.op('readwrite', (s) => s.clear()); },
+};
+async function refreshCache() {
+  const k = (await DB.keys()) || [];
+  const tx = k.filter((x) => x.endsWith('|tx')).length, all = k.filter((x) => x.endsWith('|all')).length;
+  $('cacheInfo').textContent = `快取：大台 ${tx} 天、完整 ${all} 天（存在這台裝置）`;
+}
+$('btnClearCache').onclick = async () => { if (confirm('清除已下載的 1 分 K 快取？')) { await DB.clear(); refreshCache(); } };
+
+// ---------------- 表單 ----------------
+const today = new Date(); const half = new Date(); half.setDate(half.getDate() - 183);
+$('dEnd').value = ymd(today); $('dStart').value = ymd(half);
+function readParams() {
+  const n = (id, d) => { const v = Number($(id).value); return Number.isFinite(v) ? v : d; };
+  const dec = $('pDec').value.split(/[,，\s]+/).map(Number).filter((x) => Number.isFinite(x) && x > 0).sort((a, b) => a - b);
+  const round = n('pRound', 60);
+  const decisions = dec.filter((x) => x < round);
+  if (!decisions.length) throw new Error('決策點必須小於回合長度');
+  return {
+    roundMin: round, decisions, threshold: n('pTh', 0.05), contract: $('pContract').value, feeNtd: n('pFee', 25), slipPts: n('pSlip', 1),
+    minTrainDays: Math.max(20, n('pMinTrain', 60)), refitDays: Math.max(5, n('pRefit', 20)), knnK: Math.max(10, n('pK', 60)),
+    knnWeight: Math.max(0, Math.min(1, n('pKw', 0.5))), l2: Math.max(0, n('pL2', 1)), flowWin: Math.max(1, n('pFlow', 10)),
+  };
+}
+const FORM_IDS = ['src', 'dStart', 'dEnd', 'mode', 'pRound', 'pDec', 'pTh', 'pContract', 'pFee', 'pSlip', 'pMinTrain', 'pRefit', 'pK', 'pKw', 'pL2', 'pFlow'];
+try { const s = JSON.parse(lsGet(LS_P) || '{}'); for (const id of FORM_IDS) if (s[id] != null && id !== 'dEnd') $(id).value = s[id]; } catch (_) {}
+function saveForm() { const s = {}; for (const id of FORM_IDS) s[id] = $(id).value; lsSet(LS_P, JSON.stringify(s)); }
+function onSrc() {
+  const v = $('src').value;
+  document.querySelectorAll('.srcFm').forEach((e) => e.classList.toggle('hidden', v !== 'finmind'));
+  document.querySelectorAll('.srcCsv').forEach((e) => e.classList.toggle('hidden', v !== 'csv'));
+  estimate();
+}
+function estimate() {
+  const s = new Date($('dStart').value + 'T00:00:00'), e = new Date($('dEnd').value + 'T00:00:00');
+  const days = Math.max(0, Math.round((e - s) / 864e5 * 5 / 7 * 0.97));
+  const per = $('mode').value === 'all' ? 3 : 1;
+  const mt = Number($('pMinTrain').value) || 60;
+  $('estimate').innerHTML = `約 <b>${days}</b> 個交易日，需下載約 ${days * per} 次逐筆（已快取的日子不重抓）。` +
+    (days <= mt + 20 ? ` <span class="neg">天數太少：至少要比「最少訓練天數 ${mt}」多 20 天以上，才有樣本外結果。</span>` : ` 樣本外約 ${Math.max(0, days - mt)} 天。`);
+}
+['src', 'dStart', 'dEnd', 'mode', 'pMinTrain'].forEach((id) => $(id).addEventListener('change', () => { onSrc(); saveForm(); }));
+FORM_IDS.forEach((id) => $(id).addEventListener('change', saveForm));
+onSrc(); refreshCache();
+
+// ---------------- 下載資料 ----------------
+let stopFlag = false;
+async function fetchDayBars(date, mode) {
+  const key = `${date}|${mode}`;
+  const hit = await DB.get(key);
+  if (hit) return { bars: hit, cached: true };
+  const prods = mode === 'all' ? ['TX', 'MTX', 'TMF'] : ['TX'];
+  const rows = {};
+  for (const p of prods) {
+    let r = await finmind({ dataset: 'TaiwanFuturesTick', data_id: p, start_date: date, end_date: date }, 180000);
+    if (!r.length) r = await finmind({ dataset: 'TaiwanFuturesTick', data_id: p, date }, 180000).catch(() => []);
+    rows[p] = r;
+  }
+  const trades = SmartMoney.rowsToTrades(rows);
+  const bars = trades.length > 100 ? EdgeCore.compactBars(SmartMoney.buildBars(trades)) : [];
+  if (bars.length >= 30) await DB.put(key, bars);
+  return { bars, cached: false };
+}
+
+async function loadFinmindDays() {
+  if (!token()) throw new Error('請先在 ① 填入 FinMind sponsor Token');
+  const start = $('dStart').value, end = $('dEnd').value;
+  if (!start || !end || start > end) throw new Error('日期區間不正確');
+  const mode = $('mode').value;
+  status('取得交易日曆…');
+  const list = await tradingDays(start, end);
+  log(`交易日 ${list.length} 天（${list[0]} ~ ${list[list.length - 1]}），模式 ${mode === 'all' ? 'TX+MTX+TMF' : '只抓 TX'}`);
+  const res = new Array(list.length);
+  let next = 0, done = 0, dl = 0;
+  const t0 = Date.now();
+  let fatal = null;
+  async function worker() {
+    while (!stopFlag && !fatal && next < list.length) {
+      const i = next++, d = list[i];
+      try {
+        const r = await fetchDayBars(d, mode);
+        res[i] = r.bars.length >= 30 ? { date: d, bars: r.bars, hasFlow: true } : null;
+        if (!r.cached) { dl++; log(`${d} 下載完成：${r.bars.length} 根 1 分 K`); }
+        if (!r.bars.length) log(`${d} 無資料（假日或尚未更新）`);
+      } catch (e) {
+        log(`${d} 失敗：${e.message}`);
+        if (isPermErr(e.message)) fatal = new Error(`FinMind 拒絕：${e.message}（逐筆資料需要 sponsor 方案）`);
+      }
+      done++;
+      const el = (Date.now() - t0) / 1000;
+      const eta = dl ? el / done * (list.length - done) : 0;
+      status(`資料 ${done}/${list.length} 天${eta > 5 ? `，預估剩 ${Math.ceil(eta / 60)} 分` : ''}`);
+      prog(done / list.length * 0.8);
+    }
+  }
+  await Promise.all([worker(), worker()]);
+  if (fatal) throw fatal;
+  if (stopFlag) throw new Error('已停止（已下載的日子都存在快取，下次會直接用）');
+  refreshCache();
+  return res.filter(Boolean);
+}
+
+async function loadDays(params) {
+  const src = $('src').value;
+  if (src === 'demo') return { days: EdgeCore.syntheticDays(300, 21, 0.35), source: '合成資料（示範，非真實行情）' };
+  if (src === 'csv') {
+    const f = $('csvFile').files[0];
+    if (!f) throw new Error('請選擇 CSV 檔');
+    const days = EdgeCore.parseCsvDays(await f.text(), params);
+    return { days, source: `CSV 1 分 K：${f.name}` };
+  }
+  const days = await loadFinmindDays();
+  return { days, source: `FinMind 台指期逐筆（${$('mode').value === 'all' ? 'TX/MTX/TMF' : 'TX'}）→ 1 分 K + 大小單流向` };
+}
+
+// ---------------- 執行 ----------------
+let lastResult = null, wakeLock = null;
+$('btnStop').onclick = () => { stopFlag = true; status('停止中…'); };
+$('btnRun').onclick = async () => {
+  stopFlag = false;
+  $('btnRun').disabled = true; $('btnStop').disabled = false; prog(0);
+  try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
+  try {
+    const params = readParams(); saveForm();
+    const { days, source } = await loadDays(params);
+    log(`可用交易日 ${days.length} 天`);
+    if (days.length <= params.minTrainDays + 5) throw new Error(`可用交易日 ${days.length} 天，不足以做 walk-forward（最少訓練 ${params.minTrainDays} 天 + 樣本外）。請拉長日期或降低「最少訓練天數」。`);
+    status('計算中…');
+    const r = await EdgeCore.runBacktest(days, params, source, async (f) => { prog(0.8 + 0.2 * f); await new Promise((res) => setTimeout(res, 0)); });
+    prog(1);
+    lastResult = r;
+    render(r);
+    status(`完成（計算 ${r.elapsedSec} 秒）`);
+    log(`完成：${r.verdict.label}`);
+    $('report').scrollIntoView({ behavior: 'smooth' });
+  } catch (e) {
+    status(''); log('錯誤：' + e.message); alert(e.message);
+  } finally {
+    $('btnRun').disabled = false; $('btnStop').disabled = true;
+    try { if (wakeLock) await wakeLock.release(); } catch (_) {}
+    wakeLock = null;
+  }
+};
+
+// ---------------- 報告 ----------------
+let chL = null, chE = null;
+function kpiList(r) {
+  const st = r.trades || {}, pm = r.probability || {};
+  return [
+    ['樣本外交易數', fmt(st.n)], ['淨勝率', pct(st.winRate)], ['平均淨點數 / 筆', `<span class="${cls(st.avgNetPts)}">${fmt(st.avgNetPts, 2)}</span>`],
+    ['總淨損益（元）', `<span class="${cls(st.totalNetNtd)}">${fmt(st.totalNetNtd)}</span>`], ['t 值', fmt(st.tStat, 2)], ['年化 Sharpe', fmt(st.sharpeAnnual, 2)],
+    ['最大回落（元）', fmt(st.maxDrawdownNtd)], ['獲利因子', fmt(st.profitFactor, 2)], ['Brier 模型 / 硬幣', `${fmt(pm.brierModel, 4)} / 0.25`],
+    ['Brier skill', `<span class="${cls(pm.skill)}">${fmt(pm.skill, 4)}</span>`], ['方向命中率', pct(pm.hitRate)], ['凱利比例', r.kelly == null ? '—' : pct(r.kelly)],
+  ];
+}
+function metaText(r) {
+  return `${r.source} · ${r.range.from} ~ ${r.range.to}（${r.range.days} 天，樣本外 ${r.range.oosDays} 天 / ${fmt(r.oosSamples)} 個決策點）· 契約 ${r.params.contract}（每點 ${r.pointValue} 元）· 來回成本 ${r.costPtsRoundTrip} 點 · 回合 ${r.params.roundMin} 分 · 決策點 ${r.params.decisions.join('/')} 分 · 門檻 ${r.params.threshold} · ${r.updated}`;
+}
+function thHtml(r) {
+  return '<tr><th>門檻</th><th>筆數</th><th>淨勝率</th><th>毛點/筆</th><th>淨點/筆</th><th>總淨(元)</th><th>t</th></tr>' +
+    r.thresholds.map((t) => `<tr class="${t.threshold === r.params.threshold ? 'sel' : ''}"><td>≥ ${t.threshold.toFixed(2)}</td><td>${fmt(t.n)}</td><td>${pct(t.winRate)}</td><td>${fmt(t.avgGrossPts, 2)}</td><td class="${cls(t.avgNetPts)}">${fmt(t.avgNetPts, 2)}</td><td class="${cls(t.totalNetNtd)}">${fmt(t.totalNetNtd)}</td><td>${fmt(t.tStat, 2)}</td></tr>`).join('');
+}
+function weightsHtml(r) {
+  const mx = Math.max(...r.weights.map((w) => Math.abs(w.coef)), 1e-9);
+  return '<table>' + r.weights.map((w) => `<tr><td>${esc(w.label)}</td><td style="width:45%"><div class="bar" style="width:${Math.abs(w.coef) / mx * 100}%;background:${w.coef > 0 ? '#4f8cff' : '#c0573a'}"></div></td><td class="${cls(w.coef)}">${w.coef > 0 ? '+' : ''}${w.coef.toFixed(3)}</td></tr>`).join('') + '</table>';
+}
+function tradesHtml(r) {
+  return '<tr><th>日期</th><th>回合</th><th>進場</th><th>方向</th><th>P(上)</th><th>目標價</th><th>進場價</th><th>出場價</th><th>淨點</th><th>淨(元)</th></tr>' +
+    r.recentTrades.slice().reverse().map((t) => `<tr><td>${t.date}</td><td>${t.round}</td><td>${t.time}</td><td class="${t.side > 0 ? 'pos' : 'neg'}">${t.side > 0 ? '多' : '空'}</td><td>${pct(t.p)}</td><td>${fmt(t.ref)}</td><td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td class="${cls(t.netPts)}">${fmt(t.netPts, 1)}</td><td class="${cls(t.netNtd)}">${fmt(t.netNtd)}</td></tr>`).join('');
+}
+function verdictHtml(r) {
+  const v = r.verdict;
+  return `<div class="verdict ${v.edgeFound ? 'ok' : 'no'}">${v.edgeFound ? '✅' : '⛔'} ${esc(v.label)}<ul>${v.reasons.map((x) => '<li>' + esc(x) + '</li>').join('')}</ul></div>`;
+}
+function render(r) {
+  $('report').classList.remove('hidden');
+  $('meta').textContent = metaText(r);
+  $('synthWarn').innerHTML = /合成/.test(r.source) ? '<div class="warn" style="margin-top:10px">⚠️ 這是<b>合成資料</b>示範（刻意放入可預測成分的正對照組），不是真實行情。</div>' : '';
+  $('verdict').innerHTML = verdictHtml(r);
+  $('kpis').innerHTML = kpiList(r).map(([l, x]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${x}</div></div>`).join('');
+  $('tTh').innerHTML = thHtml(r); $('weights').innerHTML = weightsHtml(r); $('tTrades').innerHTML = tradesHtml(r);
+  if (!window.Chart) return;
+  Chart.defaults.color = '#8a9bb3'; Chart.defaults.borderColor = '#1f2d40';
+  if (chL) chL.destroy(); if (chE) chE.destroy();
+  const L = r.lattice.filter((b) => b.realized != null);
+  chL = new Chart($('cLattice'), { data: { datasets: [
+    { type: 'scatter', label: '實際上漲比例', data: L.map((b) => ({ x: b.predicted, y: b.realized, n: b.n })), backgroundColor: '#00d4ff', pointRadius: L.map((b) => Math.max(3, Math.min(14, Math.sqrt(b.n) / 2))) },
+    { type: 'line', label: '完美校準', data: [{ x: 0.3, y: 0.3 }, { x: 0.7, y: 0.7 }], borderColor: '#8a9bb388', borderDash: [4, 4], pointRadius: 0 }] },
+    options: { animation: false, maintainAspectRatio: false, scales: { x: { type: 'linear', min: 0.3, max: 0.7, title: { display: true, text: '預測 P(上漲)' } }, y: { min: 0.2, max: 0.8, title: { display: true, text: '實際' } } },
+      plugins: { tooltip: { callbacks: { label: (c) => `預測 ${pct(c.raw.x)} → 實際 ${pct(c.raw.y)}（n=${c.raw.n ?? ''}）` } } } } });
+  const E = r.equity;
+  chE = new Chart($('cEquity'), { type: 'line', data: { labels: E.map((e) => e.date), datasets: [{ data: E.map((e) => e.equity), borderColor: '#00ff88', backgroundColor: '#00ff8814', fill: true, pointRadius: 0, borderWidth: 1.5 }] },
+    options: { animation: false, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksLimit: 6 } } } } });
+}
+
+// ---------------- 匯出 ----------------
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+const fname = (ext) => `tx-edge-backtest_${lastResult.range.from}_${lastResult.range.to}.${ext}`;
+$('btnDlJson').onclick = () => { if (lastResult) download(fname('json'), JSON.stringify(lastResult, null, 1), 'application/json'); };
+$('btnDlCsv').onclick = () => {
+  if (!lastResult) return;
+  const rows = [['date', 'round', 'time', 'side', 'pUp', 'priceToBeat', 'entry', 'exit', 'grossPts', 'netPts', 'netNtd']]
+    .concat(lastResult.allTrades.map((t) => [t.date, t.round, t.time, t.side > 0 ? 'long' : 'short', t.p, t.ref, t.entry, t.exit, t.grossPts, t.netPts, t.netNtd]));
+  download(fname('csv'), '﻿' + rows.map((r) => r.join(',')).join('\n'), 'text/csv');
+};
+$('btnPrint').onclick = () => window.print();
+$('btnDlHtml').onclick = () => {
+  if (!lastResult) return;
+  const r = lastResult;
+  const img = (id) => { try { return `<img src="${$(id).toDataURL('image/png')}" style="width:100%;max-width:520px">`; } catch (_) { return ''; } };
+  const css = document.querySelector('style').textContent;
+  const html = `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>台指機率優勢回測報告</title><style>${css}</style></head><body><div class="wrap">
+<h1>🎯 台指期機率優勢回測報告</h1><div class="sub">${esc(metaText(r))}</div>
+${/合成/.test(r.source) ? '<div class="warn" style="margin-top:10px">⚠️ 合成資料示範，非真實行情</div>' : ''}
+<div class="panel">${verdictHtml(r)}<div class="grid" style="margin-top:12px">${kpiList(r).map(([l, x]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${x}</div></div>`).join('')}</div></div>
+<div class="two"><div class="panel"><h2>機率校準格</h2>${img('cLattice')}</div><div class="panel"><h2>權益曲線（元）</h2>${img('cEquity')}</div></div>
+<div class="two"><div class="panel"><h2>門檻表</h2><div class="scroll"><table>${thHtml(r)}</table></div></div><div class="panel"><h2>訊號節點權重</h2>${weightsHtml(r)}</div></div>
+<div class="panel"><h2>最近交易（樣本外）</h2><div class="scroll"><table>${tradesHtml(r)}</table></div></div>
+<div class="panel how"><h2>參數</h2><code>${esc(JSON.stringify(r.params))}</code></div></div></body></html>`;
+  download(fname('html'), html, 'text/html');
+};
+</script>
+</body>
+</html>

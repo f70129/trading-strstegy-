@@ -29,7 +29,7 @@ node tests/parity.js                        # JS ↔ Python 一致性檢核
 ## 🎯 機率優勢回測（Polymarket 原理 → 台指期）
 
 **手機 / 電腦直接開 `backtest.html`**：填入 FinMind sponsor Token → 選日期 → 開始回測，在瀏覽器內下載逐筆、計算並產生報告（HTML / CSV / JSON / 列印 PDF）。
-排程結果看 `edge.html`；Python 引擎 `edge_engine.py`。回合 / Price to Beat / 多空訊號節點 / 類比路徑機率 / 扣成本優勢 / walk-forward 大數法則檢驗，詳見 **[EDGE.md](EDGE.md)**。
+**獨立版單一檔案** `standalone/tx-edge-backtest.html`：不依賴其他檔案，雙擊即可用，也能單獨放到任何靜態空間。排程結果看 `edge.html`；Python 引擎 `edge_engine.py`。回合 / Price to Beat / 多空訊號節點 / 類比路徑機率 / 扣成本優勢 / walk-forward 大數法則檢驗，詳見 **[EDGE.md](EDGE.md)**。
 
 ## 部署建議
 

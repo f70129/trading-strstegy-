@@ -27,6 +27,15 @@
 - Token 只存在該裝置的瀏覽器裡，由瀏覽器直連 FinMind。
 - 下載過的日子會壓縮成 1 分 K 存在 IndexedDB，之後重跑或換參數都是秒算。可以分幾次下載，按「停止」也不會遺失已下載的部分。
 
+## 獨立版（單一檔案）：`standalone/tx-edge-backtest.html`
+
+一個 HTML 檔就是完整的回測看板：計算核心已內嵌，不依賴 repo 的其他檔案，也不需要伺服器（圖表從 CDN 載入，下載資料需要網路）。
+
+- **電腦**：下載這個檔案 → 雙擊用瀏覽器開（Chrome / Edge 建議）→ 貼 token → 回測。
+- **手機要有網址**：把這一個檔案放到任何靜態空間即可，例如 Netlify Drop（app.netlify.com/drop 拖進去）、GitHub Pages，或合併進 main 後由 Cloudflare Pages 提供 `/standalone/tx-edge-backtest.html`。
+- Android 可用檔案管理員以 Chrome 開啟本機檔；iPhone 的「檔案」App 不會執行網頁程式，請用網址開。
+- 修改 `backtest.html` 或 `js/*.js` 後，重新產生：`node scripts/build-standalone.mjs`
+
 ## Python 使用
 
 ```bash
