@@ -8,6 +8,10 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-parity-'));
 const root = path.join(__dirname, '..');
 const py = `
 import json, sys
+try:
+    import numpy  # noqa: F401
+except ImportError:
+    sys.exit('edge-parity 需要 numpy（pip install numpy）：Python 端的 kNN 類比路徑依賴它')
 sys.path.insert(0, ${JSON.stringify(root)})
 import edge_engine as E
 out = {}
