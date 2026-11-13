@@ -2,8 +2,9 @@ name: Update AAII sentiment
 
 on:
   schedule:
-    # AAII publishes every Thursday; refresh Friday 13:00 UTC (and allow manual runs)
-    - cron: "0 13 * * 5"
+    # AAII 每週四(美東)公布一次。每天 22:00 UTC(≈美東下午)檢查一次,
+    # 只有在出現新一週時才會提交,等同於每期公布當天即更新。
+    - cron: "0 22 * * *"
   workflow_dispatch:
 
 permissions:
