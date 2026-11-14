@@ -2,7 +2,7 @@
   "signal": "neutral",
   "source": "FinMind 台指選擇權日未平倉彙總(TXO)+ 期交所 OpenAPI 補近月",
   "dataset_used": "FinMind 台指選擇權日未平倉彙總(TXO)+ 期交所 OpenAPI 補近月 · 加權指數前瞻報酬基準(1456 交易日)",
-  "updated": "2026-11-13",
+  "updated": "2026-11-14",
   "latest": {
     "date": "2026-11-13",
     "pcoi": 0.719,
