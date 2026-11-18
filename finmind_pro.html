@@ -465,6 +465,26 @@ footer b{color:var(--ink-2)}
       </div>
     </section>
 
+    <!-- 即時漲跌家數(上市+上櫃 主要成分股樣本) -->
+    <section class="card col-12" id="breadthCard">
+      <div class="hd"><span class="t">即時漲跌家數(上市+上櫃)</span><span class="s">盤中主要成分股樣本 · 約每20秒更新</span><div class="meta" id="brMeta"></div></div>
+      <div class="body">
+        <div id="brBar" style="display:flex;height:24px;border-radius:6px;overflow:hidden;font-size:11px;font-weight:700;margin-bottom:12px;background:var(--panel-2)">
+          <div id="brBarUp" style="background:#dc2626;color:#fff;display:flex;align-items:center;justify-content:center;min-width:0;transition:flex .4s"></div>
+          <div id="brBarFlat" style="background:#9ca3af;color:#fff;display:flex;align-items:center;justify-content:center;min-width:0;transition:flex .4s"></div>
+          <div id="brBarDn" style="background:#16a34a;color:#fff;display:flex;align-items:center;justify-content:center;min-width:0;transition:flex .4s"></div>
+        </div>
+        <div class="finra-stats">
+          <div class="ftile"><span class="lb">上漲家數(含漲停)</span><span class="vv" id="brUp" style="color:#dc2626">—</span><span class="sub" id="brUpSub">漲停 — 家</span></div>
+          <div class="ftile"><span class="lb">下跌家數(含跌停)</span><span class="vv" id="brDn" style="color:#16a34a">—</span><span class="sub" id="brDnSub">跌停 — 家</span></div>
+          <div class="ftile"><span class="lb">平盤／未成交</span><span class="vv" id="brFlat">—</span><span class="sub" id="brFlatSub">—</span></div>
+          <div class="ftile"><span class="lb">漲跌家數比</span><span class="vv" id="brRatio">—</span><span class="sub">上漲 ÷ 下跌</span></div>
+        </div>
+        <div class="mtable-wrap" style="margin-top:10px"><table class="mtable" id="brTable"></table></div>
+        <div class="mg-note" id="brNote"></div>
+      </div>
+    </section>
+
     <!-- 台指選擇權 Put/Call 未平倉比 · 回測與動態警戒 -->
     <section class="card col-12" id="pcrCard">
       <div class="hd"><span class="t">台指選擇權 P/C 未平倉比</span><span class="s">歷史回測 · 動態警戒線 · 跌破後報酬</span><div class="meta" id="pcrMeta"></div></div>
@@ -796,6 +816,7 @@ function scheduleRealtime(id){
     if(rt&&mergeRealtime(rt)){setStatus('live-rt',rt.time+(rt.src?' · '+rt.src:''));updateHeader(id,currentName);renderAll();}
     refreshOTCLive(); // 盤中同步刷新櫃買指數即時
     refreshMacroLive(); // 盤中同步刷新大盤環境（加權指數／匯率）即時
+    loadBreadth(); // 盤中同步刷新漲跌家數（樣本即時）
   },20000);
 }
 
@@ -857,6 +878,7 @@ async function loadAll(){
   if(!PCC)loadPCC(); // CBOE 股票 Put/Call 比率（每日），與個股無關，載入一次即快取
   if(!OTC)loadOTC(); // 櫃買指數 × 融資減碼 追蹤，與個股無關，載入一次即快取
   if(!PCR)loadPCR(); // 台指選擇權 P/C 未平倉比回測，與個股無關，載入一次即快取
+  loadBreadth(); // 即時漲跌家數（主要成分股樣本），盤中每20秒刷新
   loadHolders(id); // 大戶持股 800~1000張（集保分散表，per-stock），每次查詢更新
 }
 function setStatus(mode,extra){
@@ -891,7 +913,7 @@ function updateHeader(id,name){
 /* ---------- render orchestrator ---------- */
 function renderAll(){
   if(!PRICE.length)return;
-  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawHolders,drawAAII,renderStockMargin,drawMarketMargin,drawFINRA,drawPCC,drawPCR,drawOTC,drawRiskOverview,renderAdvice]
+  [renderMain,renderMACD,renderInst,renderMargin,renderScore,renderLevels,renderSignals,drawMacro,drawHolders,drawAAII,renderStockMargin,drawMarketMargin,drawFINRA,drawPCC,drawPCR,drawOTC,drawBreadth,drawRiskOverview,renderAdvice]
     .forEach(fn=>{try{fn();}catch(e){console.error(fn.name,e);}});
   requestAnimationFrame(()=>Object.values(charts).forEach(c=>c&&c.resize()));
 }
@@ -949,6 +971,11 @@ function renderMACD(){
 }
 /* ---------- 大盤環境：VIXTWN / 加權指數 / 台美匯率（三堆疊，各自刻度）---------- */
 let MACRO=null, MACRO_LOADING=false, AAII=null, MKT=null, MKT_LOADING=false, FINRA=null, PCC=null, mktRows=20, OTC=null, OTC_LOADING=false;
+let BREADTH=null, BREADTH_LOADING=false;
+// 漲跌家數樣本universe（主要成分股；非全市場,僅盤中近似）
+const BR_TSE=["2330","2317","2454","2308","2382","2303","2412","3711","2881","2882","2891","2886","2884","2885","2892","2880","2883","2887","2890","5880","5871","2379","2357","2345","3034","3008","2409","3231","2301","2327","3017","2395","6669","3443","4938","2376","2377","2383","2474","1216","1301","1303","1326","1101","2002","2207","2227","2603","2609","2615","2610","2618","2912","2801","9910","1605"];
+const BR_OTC=["6488","5483","3105","4966","6510","8299","5274","6531","3293","1565","3529","4763","6446","6187","8436","6279","3260","8069","6689","4123"];
+const BR_OTC_SET=new Set(BR_OTC);
 async function yGet(sym,range){
   try{
     const r=await fetch(`/api/yahoo?symbol=${encodeURIComponent(sym)}&range=${range}&interval=1d`);
@@ -1629,6 +1656,73 @@ async function refreshOTCLive(){
       const z=num(m.z),y=num(m.y); if(z!=null&&y!=null&&y>0){ OTC.live={level:z,prev:y,pct:(z-y)/y*100,time:m.t||''}; try{drawOTC();}catch(e){} try{drawRiskOverview();}catch(e){} return; } }catch(e){}
   }
 }
+/* ---------- 即時漲跌家數(上市+上櫃 主要成分股樣本) ---------- */
+async function brBatch(chs){
+  try{ const r=await fetch('/api/twse?chs='+encodeURIComponent(chs.join(','))); if(!r.ok)return []; const j=await r.json(); return (j&&j.msgArray)||[]; }
+  catch(e){ return []; }
+}
+async function loadBreadth(){
+  if(BREADTH_LOADING)return; BREADTH_LOADING=true;
+  try{
+    const chs=[...BR_TSE.map(c=>'tse_'+c), ...BR_OTC.map(c=>'otc_'+c)];
+    const batches=[]; for(let i=0;i<chs.length;i+=40)batches.push(chs.slice(i,i+40));
+    const res=await Promise.all(batches.map(b=>brBatch(b)));
+    const arr=res.flat();
+    if(arr.length)BREADTH=aggregateBreadth(arr);
+  }catch(e){}
+  BREADTH_LOADING=false; try{drawBreadth();}catch(e){}
+}
+function aggregateBreadth(arr){
+  const S=()=>({n:0,up:0,dn:0,flat:0,lu:0,ld:0,nt:0});
+  const o={tse:S(),otc:S(),all:S(),time:''};
+  const eps=1e-6;
+  for(const m of arr){
+    const code=(m.c||'').trim();
+    const mk = m.ex==='otc' ? 'otc' : (m.ex==='tse' ? 'tse' : (BR_OTC_SET.has(code)?'otc':'tse'));
+    const z=num(m.z), y=num(m.y), u=num(m.u), w=num(m.w);
+    const s=o[mk], a=o.all; s.n++; a.n++;
+    if(!o.time){ const tt=m.t||m['%']||''; if(tt)o.time=tt; }
+    if(z==null){ s.nt++; a.nt++; continue; }        // 未成交
+    if(y==null)continue;
+    if(u!=null&&z>=u-eps){ s.lu++; a.lu++; }          // 漲停
+    if(w!=null&&z<=w+eps){ s.ld++; a.ld++; }          // 跌停
+    if(z>y+eps){ s.up++; a.up++; }                    // 上漲(含漲停)
+    else if(z<y-eps){ s.dn++; a.dn++; }               // 下跌(含跌停)
+    else { s.flat++; a.flat++; }                      // 平盤
+  }
+  return o;
+}
+function drawBreadth(){
+  const card=document.getElementById('breadthCard'); if(!card)return;
+  if(!BREADTH||!BREADTH.all.n){
+    metaChip('brMeta','neu','等待資料');
+    document.getElementById('brNote').textContent='即時漲跌家數需 TWSE MIS 可用時顯示(需部署站或本機瀏覽器);盤中約每20秒更新。';
+    return;
+  }
+  const UP='#dc2626', DN='#16a34a', a=BREADTH.all;
+  const live=inMarketHours();
+  document.getElementById('brUp').textContent=fmtInt(a.up);
+  document.getElementById('brUpSub').textContent='漲停 '+a.lu+' 家';
+  document.getElementById('brDn').textContent=fmtInt(a.dn);
+  document.getElementById('brDnSub').textContent='跌停 '+a.ld+' 家';
+  document.getElementById('brFlat').textContent=fmtInt(a.flat)+' / '+fmtInt(a.nt);
+  document.getElementById('brFlatSub').textContent='平盤 / 未成交';
+  const ratio=a.dn>0?(a.up/a.dn):null;
+  const re=document.getElementById('brRatio'); re.textContent=ratio!=null?ratio.toFixed(2):(a.up>0?'∞':'—'); re.style.color=ratio==null?'':(ratio>=1?UP:DN);
+  // A/D 長條
+  const tot=Math.max(1,a.up+a.dn+a.flat);
+  const bu=document.getElementById('brBarUp'), bf=document.getElementById('brBarFlat'), bd=document.getElementById('brBarDn');
+  bu.style.flex=a.up; bf.style.flex=a.flat; bd.style.flex=a.dn;
+  bu.textContent=a.up>tot*0.06?('▲'+a.up):''; bd.textContent=a.dn>tot*0.06?(a.dn+'▼'):''; bf.textContent=a.flat>tot*0.08?a.flat:'';
+  metaChip('brMeta', a.up>a.dn?'up':a.up<a.dn?'down':'warn', (live?'盤中 ':'')+(BREADTH.time||'')+` · 樣本 ${a.n}`);
+  // 明細表
+  const row=(lab,s)=>`<tr><td>${lab}</td><td>${s.n}</td><td class="up">${s.up}</td><td class="up">${s.lu}</td><td class="down">${s.dn}</td><td class="down">${s.ld}</td><td>${s.flat}</td></tr>`;
+  document.getElementById('brTable').innerHTML=
+    '<thead><tr><th>市場</th><th>樣本</th><th>上漲</th><th>漲停</th><th>下跌</th><th>跌停</th><th>平盤</th></tr></thead><tbody>'+
+    row('上市', BREADTH.tse)+row('上櫃', BREADTH.otc)+row('合計', a)+'</tbody>';
+  document.getElementById('brNote').innerHTML=`樣本為上市 ${BR_TSE.length} + 上櫃 ${BR_OTC.length} 檔主要成分股的${live?'盤中即時':'最近'}報價(來源 TWSE MIS),逐檔以現價 vs 昨收／漲跌停價即時統計。<span style="color:var(--muted)"> ※ 此為樣本近似,非全市場官方家數;官方全市場漲跌停家數於收盤後公布。</span>`;
+}
+
 function drawOTC(){
   const card=document.getElementById('otcCard'); if(!card)return; const p=pal();
   const idx=(OTC&&OTC.idx)?OTC.idx:[];
