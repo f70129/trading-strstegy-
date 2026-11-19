@@ -1672,6 +1672,17 @@ async function loadBreadth(){
   }catch(e){}
   BREADTH_LOADING=false; try{drawBreadth();}catch(e){}
 }
+// 盤中多數檔在當前5秒快照無成交(z='-'),改以 現價=z → 委買賣中價 → 前筆價 → 開盤
+function brPrice(m){
+  const z=num(m.z); if(z!=null&&z>0)return z;
+  const ask=num((''+(m.a||'')).split('_')[0]), bid=num((''+(m.b||'')).split('_')[0]);
+  if(ask!=null&&ask>0&&bid!=null&&bid>0)return (ask+bid)/2;  // 一般盤中:買賣中價
+  if(ask!=null&&ask>0)return ask;                            // 跌停鎖死:僅剩委賣
+  if(bid!=null&&bid>0)return bid;                            // 漲停鎖死:僅剩委買
+  const pz=num(m.pz); if(pz!=null&&pz>0)return pz;           // 前一筆成交價
+  const o2=num(m.o); if(o2!=null&&o2>0)return o2;            // 開盤價
+  return null;
+}
 function aggregateBreadth(arr){
   const S=()=>({n:0,up:0,dn:0,flat:0,lu:0,ld:0,nt:0});
   const o={tse:S(),otc:S(),all:S(),time:''};
@@ -1679,16 +1690,15 @@ function aggregateBreadth(arr){
   for(const m of arr){
     const code=(m.c||'').trim();
     const mk = m.ex==='otc' ? 'otc' : (m.ex==='tse' ? 'tse' : (BR_OTC_SET.has(code)?'otc':'tse'));
-    const z=num(m.z), y=num(m.y), u=num(m.u), w=num(m.w);
+    const px=brPrice(m), y=num(m.y), u=num(m.u), w=num(m.w);
     const s=o[mk], a=o.all; s.n++; a.n++;
     if(!o.time){ const tt=m.t||m['%']||''; if(tt)o.time=tt; }
-    if(z==null){ s.nt++; a.nt++; continue; }        // 未成交
-    if(y==null)continue;
-    if(u!=null&&z>=u-eps){ s.lu++; a.lu++; }          // 漲停
-    if(w!=null&&z<=w+eps){ s.ld++; a.ld++; }          // 跌停
-    if(z>y+eps){ s.up++; a.up++; }                    // 上漲(含漲停)
-    else if(z<y-eps){ s.dn++; a.dn++; }               // 下跌(含跌停)
-    else { s.flat++; a.flat++; }                      // 平盤
+    if(px==null||y==null){ s.nt++; a.nt++; continue; }  // 無報價/未開盤
+    if(u!=null&&px>=u-eps){ s.lu++; a.lu++; }           // 漲停
+    if(w!=null&&px<=w+eps){ s.ld++; a.ld++; }           // 跌停
+    if(px>y+eps){ s.up++; a.up++; }                     // 上漲(含漲停)
+    else if(px<y-eps){ s.dn++; a.dn++; }                // 下跌(含跌停)
+    else { s.flat++; a.flat++; }                        // 平盤
   }
   return o;
 }
