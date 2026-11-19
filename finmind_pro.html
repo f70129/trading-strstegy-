@@ -475,8 +475,10 @@ footer b{color:var(--ink-2)}
           <div id="brBarDn" style="background:#16a34a;color:#fff;display:flex;align-items:center;justify-content:center;min-width:0;transition:flex .4s"></div>
         </div>
         <div class="finra-stats">
-          <div class="ftile"><span class="lb">上漲家數(含漲停)</span><span class="vv" id="brUp" style="color:#dc2626">—</span><span class="sub" id="brUpSub">漲停 — 家</span></div>
-          <div class="ftile"><span class="lb">下跌家數(含跌停)</span><span class="vv" id="brDn" style="color:#16a34a">—</span><span class="sub" id="brDnSub">跌停 — 家</span></div>
+          <div class="ftile"><span class="lb">上漲家數</span><span class="vv" id="brUp" style="color:#dc2626">—</span><span class="sub">含漲停</span></div>
+          <div class="ftile"><span class="lb">下跌家數</span><span class="vv" id="brDn" style="color:#16a34a">—</span><span class="sub">含跌停</span></div>
+          <div class="ftile"><span class="lb">漲停家數</span><span class="vv" id="brLU" style="color:#dc2626">—</span><span class="sub">鎖漲停(現價≥漲停價)</span></div>
+          <div class="ftile"><span class="lb">跌停家數</span><span class="vv" id="brLD" style="color:#16a34a">—</span><span class="sub">鎖跌停(現價≤跌停價)</span></div>
           <div class="ftile"><span class="lb">平盤／未成交</span><span class="vv" id="brFlat">—</span><span class="sub" id="brFlatSub">—</span></div>
           <div class="ftile"><span class="lb">漲跌家數比</span><span class="vv" id="brRatio">—</span><span class="sub">上漲 ÷ 下跌</span></div>
         </div>
@@ -1712,9 +1714,9 @@ function drawBreadth(){
   const UP='#dc2626', DN='#16a34a', a=BREADTH.all;
   const live=inMarketHours();
   document.getElementById('brUp').textContent=fmtInt(a.up);
-  document.getElementById('brUpSub').textContent='漲停 '+a.lu+' 家';
   document.getElementById('brDn').textContent=fmtInt(a.dn);
-  document.getElementById('brDnSub').textContent='跌停 '+a.ld+' 家';
+  const luE=document.getElementById('brLU'); luE.textContent=fmtInt(a.lu); luE.style.color=a.lu>0?'#dc2626':'var(--muted)';
+  const ldE=document.getElementById('brLD'); ldE.textContent=fmtInt(a.ld); ldE.style.color=a.ld>0?'#16a34a':'var(--muted)';
   document.getElementById('brFlat').textContent=fmtInt(a.flat)+' / '+fmtInt(a.nt);
   document.getElementById('brFlatSub').textContent='平盤 / 未成交';
   const ratio=a.dn>0?(a.up/a.dn):null;
