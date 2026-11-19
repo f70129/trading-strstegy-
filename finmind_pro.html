@@ -467,7 +467,7 @@ footer b{color:var(--ink-2)}
 
     <!-- 即時漲跌家數(上市+上櫃 主要成分股樣本) -->
     <section class="card col-12" id="breadthCard">
-      <div class="hd"><span class="t">即時漲跌家數(上市+上櫃)</span><span class="s">盤中主要成分股樣本 · 約每20秒更新</span><div class="meta" id="brMeta"></div></div>
+      <div class="hd"><span class="t">即時漲跌家數(上市+上櫃)</span><span class="s">全市場普通股 · 盤中約每20秒更新</span><div class="meta" id="brMeta"></div></div>
       <div class="body">
         <div id="brBar" style="display:flex;height:24px;border-radius:6px;overflow:hidden;font-size:11px;font-weight:700;margin-bottom:12px;background:var(--panel-2)">
           <div id="brBarUp" style="background:#dc2626;color:#fff;display:flex;align-items:center;justify-content:center;min-width:0;transition:flex .4s"></div>
@@ -974,10 +974,6 @@ function renderMACD(){
 /* ---------- 大盤環境：VIXTWN / 加權指數 / 台美匯率（三堆疊，各自刻度）---------- */
 let MACRO=null, MACRO_LOADING=false, AAII=null, MKT=null, MKT_LOADING=false, FINRA=null, PCC=null, mktRows=20, OTC=null, OTC_LOADING=false;
 let BREADTH=null, BREADTH_LOADING=false;
-// 漲跌家數樣本universe（主要成分股；非全市場,僅盤中近似）
-const BR_TSE=["2330","2317","2454","2308","2382","2303","2412","3711","2881","2882","2891","2886","2884","2885","2892","2880","2883","2887","2890","5880","5871","2379","2357","2345","3034","3008","2409","3231","2301","2327","3017","2395","6669","3443","4938","2376","2377","2383","2474","1216","1301","1303","1326","1101","2002","2207","2227","2603","2609","2615","2610","2618","2912","2801","9910","1605"];
-const BR_OTC=["6488","5483","3105","4966","6510","8299","5274","6531","3293","1565","3529","4763","6446","6187","8436","6279","3260","8069","6689","4123"];
-const BR_OTC_SET=new Set(BR_OTC);
 async function yGet(sym,range){
   try{
     const r=await fetch(`/api/yahoo?symbol=${encodeURIComponent(sym)}&range=${range}&interval=1d`);
@@ -1658,51 +1654,14 @@ async function refreshOTCLive(){
       const z=num(m.z),y=num(m.y); if(z!=null&&y!=null&&y>0){ OTC.live={level:z,prev:y,pct:(z-y)/y*100,time:m.t||''}; try{drawOTC();}catch(e){} try{drawRiskOverview();}catch(e){} return; } }catch(e){}
   }
 }
-/* ---------- 即時漲跌家數(上市+上櫃 主要成分股樣本) ---------- */
-async function brBatch(chs){
-  try{ const r=await fetch('/api/twse?chs='+encodeURIComponent(chs.join(','))); if(!r.ok)return []; const j=await r.json(); return (j&&j.msgArray)||[]; }
-  catch(e){ return []; }
-}
+/* ---------- 即時漲跌家數(全市場上市+上櫃)----------
+   由伺服器端 /api/breadth 聚合(全市場普通股,MIS 盤中即時),前端只取結果。 */
 async function loadBreadth(){
   if(BREADTH_LOADING)return; BREADTH_LOADING=true;
   try{
-    const chs=[...BR_TSE.map(c=>'tse_'+c), ...BR_OTC.map(c=>'otc_'+c)];
-    const batches=[]; for(let i=0;i<chs.length;i+=40)batches.push(chs.slice(i,i+40));
-    const res=await Promise.all(batches.map(b=>brBatch(b)));
-    const arr=res.flat();
-    if(arr.length)BREADTH=aggregateBreadth(arr);
+    const r=await fetch('/api/breadth'); if(r.ok){ const j=await r.json(); if(j&&j.all)BREADTH=j; }
   }catch(e){}
   BREADTH_LOADING=false; try{drawBreadth();}catch(e){}
-}
-// 盤中多數檔在當前5秒快照無成交(z='-'),改以 現價=z → 委買賣中價 → 前筆價 → 開盤
-function brPrice(m){
-  const z=num(m.z); if(z!=null&&z>0)return z;
-  const ask=num((''+(m.a||'')).split('_')[0]), bid=num((''+(m.b||'')).split('_')[0]);
-  if(ask!=null&&ask>0&&bid!=null&&bid>0)return (ask+bid)/2;  // 一般盤中:買賣中價
-  if(ask!=null&&ask>0)return ask;                            // 跌停鎖死:僅剩委賣
-  if(bid!=null&&bid>0)return bid;                            // 漲停鎖死:僅剩委買
-  const pz=num(m.pz); if(pz!=null&&pz>0)return pz;           // 前一筆成交價
-  const o2=num(m.o); if(o2!=null&&o2>0)return o2;            // 開盤價
-  return null;
-}
-function aggregateBreadth(arr){
-  const S=()=>({n:0,up:0,dn:0,flat:0,lu:0,ld:0,nt:0});
-  const o={tse:S(),otc:S(),all:S(),time:''};
-  const eps=1e-6;
-  for(const m of arr){
-    const code=(m.c||'').trim();
-    const mk = m.ex==='otc' ? 'otc' : (m.ex==='tse' ? 'tse' : (BR_OTC_SET.has(code)?'otc':'tse'));
-    const px=brPrice(m), y=num(m.y), u=num(m.u), w=num(m.w);
-    const s=o[mk], a=o.all; s.n++; a.n++;
-    if(!o.time){ const tt=m.t||m['%']||''; if(tt)o.time=tt; }
-    if(px==null||y==null){ s.nt++; a.nt++; continue; }  // 無報價/未開盤
-    if(u!=null&&px>=u-eps){ s.lu++; a.lu++; }           // 漲停
-    if(w!=null&&px<=w+eps){ s.ld++; a.ld++; }           // 跌停
-    if(px>y+eps){ s.up++; a.up++; }                     // 上漲(含漲停)
-    else if(px<y-eps){ s.dn++; a.dn++; }                // 下跌(含跌停)
-    else { s.flat++; a.flat++; }                        // 平盤
-  }
-  return o;
 }
 function drawBreadth(){
   const card=document.getElementById('breadthCard'); if(!card)return;
@@ -1726,13 +1685,13 @@ function drawBreadth(){
   const bu=document.getElementById('brBarUp'), bf=document.getElementById('brBarFlat'), bd=document.getElementById('brBarDn');
   bu.style.flex=a.up; bf.style.flex=a.flat; bd.style.flex=a.dn;
   bu.textContent=a.up>tot*0.06?('▲'+a.up):''; bd.textContent=a.dn>tot*0.06?(a.dn+'▼'):''; bf.textContent=a.flat>tot*0.08?a.flat:'';
-  metaChip('brMeta', a.up>a.dn?'up':a.up<a.dn?'down':'warn', (live?'盤中 ':'')+(BREADTH.time||'')+` · 樣本 ${a.n}`);
+  metaChip('brMeta', a.up>a.dn?'up':a.up<a.dn?'down':'warn', (live?'盤中 ':'')+(BREADTH.time||'')+` · 涵蓋 ${fmtInt(a.n)} 檔`);
   // 明細表
   const row=(lab,s)=>`<tr><td>${lab}</td><td>${s.n}</td><td class="up">${s.up}</td><td class="up">${s.lu}</td><td class="down">${s.dn}</td><td class="down">${s.ld}</td><td>${s.flat}</td></tr>`;
   document.getElementById('brTable').innerHTML=
     '<thead><tr><th>市場</th><th>樣本</th><th>上漲</th><th>漲停</th><th>下跌</th><th>跌停</th><th>平盤</th></tr></thead><tbody>'+
     row('上市', BREADTH.tse)+row('上櫃', BREADTH.otc)+row('合計', a)+'</tbody>';
-  document.getElementById('brNote').innerHTML=`樣本為上市 ${BR_TSE.length} + 上櫃 ${BR_OTC.length} 檔主要成分股的${live?'盤中即時':'最近'}報價(來源 TWSE MIS),逐檔以現價 vs 昨收／漲跌停價即時統計。<span style="color:var(--muted)"> ※ 此為樣本近似,非全市場官方家數;官方全市場漲跌停家數於收盤後公布。</span>`;
+  document.getElementById('brNote').innerHTML=`涵蓋全市場上市+上櫃普通股共 ${fmtInt(a.n)} 檔的${live?'盤中即時':'最近'}報價(來源 TWSE MIS),逐檔以現價(成交→委買賣中價→前筆→開盤) vs 昨收／漲跌停價即時統計。<span style="color:var(--muted)"> ※ 盤中即時值,與官方收盤家數可能因時點與未成交處理略有差異。</span>`;
 }
 
 function drawOTC(){
