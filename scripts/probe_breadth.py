@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""確認 (1) 全市場代碼來源與數量 (2) MIS getStockInfo 單次批量上限。"""
+"""全市場家數全流程驗證:抓代碼→MIS 批量查詢→以現價判漲跌/漲停跌停→印出家數。"""
 import sys
 import requests
 
@@ -8,44 +8,73 @@ UA = {"User-Agent": "Mozilla/5.0", "Accept": "application/json", "Referer": "htt
 
 def getj(url):
     r = requests.get(url, headers=UA, timeout=60)
+    return r.json()
+
+
+def codes_from(url, key):
+    out = []
+    for r in getj(url):
+        c = str(r.get(key) or "").strip()
+        if c.isdigit() and len(c) == 4 and c[0] != '0':
+            out.append(c)
+    return out
+
+
+def num(x):
     try:
-        return r.status_code, r.json()
+        s = str(x).strip().replace(",", "")
+        if s in ("", "-", "--"): return None
+        v = float(s); return v if v == v else None
     except Exception:
-        return r.status_code, r.text[:200]
+        return None
 
 
-# (1) 上市代碼：TWSE OpenAPI STOCK_DAY_ALL
-st, j = getj("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL")
-tse_codes = []
-if isinstance(j, list):
-    k = sorted(j[0].keys()) if j else []
-    print(f"[tse] STOCK_DAY_ALL status={st} rows={len(j)} keys={k}", file=sys.stderr)
-    for r in j:
-        c = str(r.get("Code") or r.get("證券代號") or "").strip()
-        if c.isdigit() and len(c) == 4 and c[0] != '0':
-            tse_codes.append(c)
-    print(f"[tse] 4碼普通股 codes={len(tse_codes)} sample={tse_codes[:5]}", file=sys.stderr)
+def price(m):
+    z = num(m.get("z"))
+    if z and z > 0: return z
+    ask = num(str(m.get("a") or "").split("_")[0]); bid = num(str(m.get("b") or "").split("_")[0])
+    if ask and bid: return (ask + bid) / 2
+    if ask: return ask
+    if bid: return bid
+    pz = num(m.get("pz"))
+    if pz and pz > 0: return pz
+    o = num(m.get("o"))
+    return o if o and o > 0 else None
 
-# (2) 上櫃代碼：TPEx OpenAPI
-st, j = getj("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes")
-otc_codes = []
-if isinstance(j, list):
-    k = sorted(j[0].keys()) if j else []
-    print(f"[otc] mainboard_quotes status={st} rows={len(j)} keys={k}", file=sys.stderr)
-    for r in j:
-        c = str(r.get("SecuritiesCompanyCode") or r.get("Code") or "").strip()
-        if c.isdigit() and len(c) == 4 and c[0] != '0':
-            otc_codes.append(c)
-    print(f"[otc] 4碼普通股 codes={len(otc_codes)} sample={otc_codes[:5]}", file=sys.stderr)
 
-# (3) MIS 批量上限：用上市代碼測 50/100/150/200
-for n in (50, 100, 150, 200):
-    chs = tse_codes[:n]
-    if len(chs) < n:
-        break
-    exch = "|".join(f"tse_{c}.tw" for c in chs)
-    url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={exch}&json=1&delay=0"
-    stt, jj = getj(url)
-    ln = len(jj.get("msgArray", [])) if isinstance(jj, dict) else -1
-    rt = jj.get("rtcode") if isinstance(jj, dict) else "?"
-    print(f"[mis] req={n} -> returned={ln} rtcode={rt} status={stt}", file=sys.stderr)
+def mis(chs):
+    exch = "|".join(chs)
+    j = getj(f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={exch}&json=1&delay=0")
+    return j.get("msgArray", []) if isinstance(j, dict) else []
+
+
+tse = codes_from("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", "Code")
+otc = codes_from("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes", "SecuritiesCompanyCode")
+chans = [f"tse_{c}.tw" for c in tse] + [f"otc_{c}.tw" for c in otc]
+print(f"universe tse={len(tse)} otc={len(otc)} total={len(chans)}", file=sys.stderr)
+
+arr = []
+for i in range(0, len(chans), 150):
+    arr += mis(chans[i:i+150])
+print(f"MIS returned entries={len(arr)}", file=sys.stderr)
+
+S = lambda: {"n":0,"up":0,"dn":0,"flat":0,"lu":0,"ld":0,"nt":0}
+o = {"tse":S(),"otc":S(),"all":S()}
+ld_samples = []
+eps = 1e-6
+for m in arr:
+    mk = "otc" if m.get("ex") == "otc" else "tse"
+    px, y, u, w = price(m), num(m.get("y")), num(m.get("u")), num(m.get("w"))
+    s, a = o[mk], o["all"]; s["n"] += 1; a["n"] += 1
+    if px is None or y is None: s["nt"] += 1; a["nt"] += 1; continue
+    if u and px >= u-eps: s["lu"] += 1; a["lu"] += 1
+    if w and px <= w+eps:
+        s["ld"] += 1; a["ld"] += 1
+        if len(ld_samples) < 10: ld_samples.append(m.get("c"))
+    if px > y+eps: s["up"] += 1; a["up"] += 1
+    elif px < y-eps: s["dn"] += 1; a["dn"] += 1
+    else: s["flat"] += 1; a["flat"] += 1
+
+for k in ("tse","otc","all"):
+    print(f"[{k}] {o[k]}", file=sys.stderr)
+print(f"跌停 samples={ld_samples}", file=sys.stderr)
