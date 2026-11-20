@@ -1,15 +1,9 @@
 {
   "source": "FINRA Margin Statistics (https://www.finra.org/investors/margin-statistics)",
   "unit": "USD millions",
-  "updated": "2026-10-27",
+  "updated": "2026-11-20",
   "count": 120,
   "data": [
-    {
-      "month": "2016-10",
-      "debit": 523760.0,
-      "fc_cash": 182051.0,
-      "fc_margin": 182986.0
-    },
     {
       "month": "2016-11",
       "debit": 539972.0,
@@ -723,6 +717,12 @@
       "debit": 1480054.0,
       "fc_cash": 215328.0,
       "fc_margin": 218581.0
+    },
+    {
+      "month": "2026-10",
+      "debit": 1448360.0,
+      "fc_cash": 210290.0,
+      "fc_margin": 212890.0
     }
   ]
 }
